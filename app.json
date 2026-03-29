@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Lume",
+    "slug": "lume",
+    "scheme": "lume",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "platforms": [
+      "android",
+      "ios"
+    ],
+    "android": {
+      "package": "com.lumetemplate"
+    },
+    "ios": {
+      "bundleIdentifier": "com.lumetemplate"
+    }
+  }
+}
