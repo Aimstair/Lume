@@ -73,6 +73,32 @@ export const localRepo = {
     });
   },
 
+  listMessageHistory(profileId: string, limit = 30): DailyMessage[] {
+    return inSql((db) => {
+      const result = db.execute(
+        `
+        SELECT *
+        FROM local_messages
+        WHERE profile_id = ?
+        ORDER BY message_date DESC, created_at DESC
+        LIMIT ?;
+        `,
+        [profileId, limit],
+      );
+
+      const rows = result.rows?._array ?? [];
+      return rows.map((row: any) => ({
+        id: row.id,
+        profileId: row.profile_id,
+        body: row.body,
+        messageDate: row.message_date,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        pendingSync: row.pending_sync === 1,
+      }));
+    });
+  },
+
   upsertDailyMessage(input: {
     id: string;
     profileId: string;

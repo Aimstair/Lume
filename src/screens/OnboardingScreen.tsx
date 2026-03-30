@@ -1,84 +1,163 @@
-import React, { useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
-import { requestBluetoothPermissions, requestLocationPermission, requestNotificationPermission } from '../services/permissions';
+import React from 'react';
+import { ActivityIndicator, Alert, FlatList, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { Compass, ShieldCheck, Sparkles } from 'lucide-react-native';
+import {
+  getPermissionState,
+  requestBluetoothPermissions,
+  requestLocationPermission,
+  requestNotificationPermission,
+} from '../services/permissions';
+import { PermissionState } from '../types/domain';
 
-type Step = 'bluetooth' | 'location' | 'notifications' | 'complete';
+type OnboardingPage = {
+  key: string;
+  title: string;
+  subtitle: string;
+  body: string;
+  Icon: typeof Compass;
+};
+
+const PAGES: OnboardingPage[] = [
+  {
+    key: 'concept',
+    title: 'Digital Serendipity',
+    subtitle: 'The concept',
+    body: 'Broadcast one daily message and discover nearby voices through real-world encounters.',
+    Icon: Compass,
+  },
+  {
+    key: 'privacy',
+    title: 'Bluetooth Required, Location Private',
+    subtitle: 'Privacy',
+    body: 'Android requires Location permission for BLE scanning. Lume does not publish your precise location.',
+    Icon: ShieldCheck,
+  },
+  {
+    key: 'vibes',
+    title: 'Positive Vibes Only',
+    subtitle: 'Community',
+    body: 'Radiance grows through hearts and meaningful moments. Be kind, thoughtful, and uplifting.',
+    Icon: Sparkles,
+  },
+];
+
+const EMPTY_PERMISSIONS: PermissionState = {
+  bluetoothGranted: false,
+  locationGranted: false,
+  notificationGranted: false,
+};
 
 export function OnboardingScreen({ onComplete }: { onComplete?: () => void }) {
-  const [step, setStep] = useState<Step>('bluetooth');
+  const { width } = useWindowDimensions();
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const [isRequesting, setIsRequesting] = React.useState(false);
+  const [hasRequestedCorePermissions, setHasRequestedCorePermissions] = React.useState(false);
+  const [permissions, setPermissions] = React.useState<PermissionState>(EMPTY_PERMISSIONS);
 
-  const progress = useMemo(() => {
-    const map: Record<Step, number> = {
-      bluetooth: 25,
-      location: 50,
-      notifications: 75,
-      complete: 100,
-    };
-    return map[step];
-  }, [step]);
+  React.useEffect(() => {
+    getPermissionState().then(setPermissions).catch(() => setPermissions(EMPTY_PERMISSIONS));
+  }, []);
 
-  const nextStep = async () => {
-    if (step === 'bluetooth') {
-      await requestBluetoothPermissions();
-      setStep('location');
-      return;
-    }
+  const coreGranted = permissions.bluetoothGranted && permissions.locationGranted;
+  const canEnter = coreGranted || hasRequestedCorePermissions;
 
-    if (step === 'location') {
-      await requestLocationPermission();
-      setStep('notifications');
-      return;
-    }
+  const onPageScrollEnd = (offsetX: number) => {
+    const index = Math.round(offsetX / width);
+    setActiveIndex(Math.max(0, Math.min(PAGES.length - 1, index)));
+  };
 
-    if (step === 'notifications') {
+  const requestCorePermissions = async () => {
+    setIsRequesting(true);
+    setHasRequestedCorePermissions(true);
+
+    try {
+      const bluetoothGranted = await requestBluetoothPermissions();
+      const locationGranted = await requestLocationPermission();
       await requestNotificationPermission();
-      setStep('complete');
-      return;
-    }
+      const nextPermissions = await getPermissionState();
+      setPermissions(nextPermissions);
 
-    onComplete?.();
+      if (!bluetoothGranted || !locationGranted) {
+        Alert.alert(
+          'Limited mode available',
+          'You can still enter Lume without permissions. Radar and BLE exchange will stay off until granted.',
+        );
+      }
+    } finally {
+      setIsRequesting(false);
+    }
   };
 
   return (
-    <View className="flex-1 bg-slate-950 px-6 pt-20">
-      <View className="absolute left-0 right-0 top-0 h-72 bg-emerald-600/20" />
-      <Text className="text-5xl font-black text-white">Lume</Text>
-      <Text className="mt-3 text-base text-slate-300">
-        Turn on proximity permissions to discover nearby voices instantly, even offline.
-      </Text>
-
-      <View className="mt-8 h-3 rounded-full bg-slate-800">
-        <View className="h-3 rounded-full bg-emerald-400" style={{ width: `${progress}%` }} />
+    <View className="flex-1 bg-slate-950 pt-14">
+      <View className="px-6">
+        <Text className="text-4xl font-black text-white">Lume</Text>
+        <Text className="mt-2 text-slate-400">Offline-first proximity messaging for meaningful encounters.</Text>
       </View>
 
-      <View className="mt-8 rounded-3xl border border-slate-700 bg-slate-900 p-5">
-        <Text className="text-sm uppercase tracking-widest text-emerald-400">Step</Text>
-        {step === 'bluetooth' ? (
-          <Text className="mt-2 text-2xl font-bold text-white">Allow Bluetooth Access</Text>
-        ) : null}
-        {step === 'location' ? (
-          <Text className="mt-2 text-2xl font-bold text-white">Allow Location Access</Text>
-        ) : null}
-        {step === 'notifications' ? (
-          <Text className="mt-2 text-2xl font-bold text-white">Allow Notifications</Text>
-        ) : null}
-        {step === 'complete' ? (
-          <Text className="mt-2 text-2xl font-bold text-white">You Are Ready</Text>
-        ) : null}
+      <FlatList
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        data={PAGES}
+        keyExtractor={(item) => item.key}
+        onMomentumScrollEnd={(event) => onPageScrollEnd(event.nativeEvent.contentOffset.x)}
+        renderItem={({ item }) => (
+          <View style={{ width }} className="px-6 pb-5 pt-7">
+            <View className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
+              <View className="h-12 w-12 items-center justify-center rounded-2xl bg-emerald-400/20">
+                <item.Icon size={24} color="#34d399" />
+              </View>
+              <Text className="mt-5 text-sm uppercase tracking-wider text-emerald-400">{item.subtitle}</Text>
+              <Text className="mt-2 text-3xl font-black leading-10 text-white">{item.title}</Text>
+              <Text className="mt-3 text-base leading-7 text-slate-400">{item.body}</Text>
+            </View>
+          </View>
+        )}
+      />
 
-        <Text className="mt-3 text-slate-300">
-          Lume uses BLE scanning and broadcasting in the background to exchange daily messages nearby.
-        </Text>
+      <View className="px-6">
+        <View className="mb-4 flex-row justify-center">
+          {PAGES.map((page, index) => (
+            <View
+              key={page.key}
+              className={index === activeIndex ? 'mx-1 h-2 w-6 rounded-full bg-emerald-400' : 'mx-1 h-2 w-2 rounded-full bg-slate-700'}
+            />
+          ))}
+        </View>
+
+        <View className="mb-3 rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+          <Text className="text-slate-400">
+            Bluetooth: <Text className={permissions.bluetoothGranted ? 'text-emerald-400' : 'text-slate-300'}>{permissions.bluetoothGranted ? 'On' : 'Off'}</Text>
+            {'  '}Location: <Text className={permissions.locationGranted ? 'text-emerald-400' : 'text-slate-300'}>{permissions.locationGranted ? 'On' : 'Off'}</Text>
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={requestCorePermissions}
+          disabled={isRequesting}
+          style={({ pressed }) => ({ opacity: pressed ? 0.84 : 1 })}
+          className={isRequesting ? 'rounded-2xl bg-emerald-400/70 py-4' : 'rounded-2xl bg-emerald-400 py-4'}
+        >
+          <View className="flex-row items-center justify-center">
+            {isRequesting ? <ActivityIndicator color="#020617" size="small" /> : null}
+            <Text className="ml-2 text-center text-base font-bold text-slate-950">
+              {isRequesting ? 'Requesting Permissions...' : 'Request BLE + Location'}
+            </Text>
+          </View>
+        </Pressable>
+
+        <Pressable
+          onPress={() => onComplete?.()}
+          disabled={!canEnter}
+          style={({ pressed }) => ({ opacity: pressed ? 0.84 : 1 })}
+          className={canEnter ? 'mt-3 rounded-2xl border border-emerald-400/40 bg-slate-900 py-4' : 'mt-3 rounded-2xl border border-slate-700 bg-slate-900 py-4'}
+        >
+          <Text className={canEnter ? 'text-center font-semibold text-emerald-300' : 'text-center font-semibold text-slate-500'}>
+            {coreGranted ? 'Enter Lume' : 'Enter Lume (Limited Mode)'}
+          </Text>
+        </Pressable>
       </View>
-
-      <Pressable
-        className="mt-8 rounded-2xl bg-emerald-400 py-4"
-        onPress={nextStep}
-      >
-        <Text className="text-center text-lg font-bold text-slate-950">
-          {step === 'complete' ? 'Continue' : 'Allow & Continue'}
-        </Text>
-      </Pressable>
     </View>
   );
 }

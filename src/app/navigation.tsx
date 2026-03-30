@@ -4,27 +4,30 @@ import { HomeScreen } from '../screens/HomeScreen';
 import { EchoFeedScreen } from '../screens/EchoFeedScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { OnboardingScreen } from '../screens/OnboardingScreen';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { House, Radar, UserRound } from 'lucide-react-native';
 
 type TabKey = 'Home' | 'EchoFeed' | 'Profile';
 
+type TabDefinition = {
+  key: TabKey;
+  label: string;
+  Icon: typeof House;
+};
+
+const TABS: TabDefinition[] = [
+  { key: 'Home', label: 'Aura', Icon: House },
+  { key: 'EchoFeed', label: 'Echoes', Icon: Radar },
+  { key: 'Profile', label: 'Profile', Icon: UserRound },
+];
+
 export function RootNavigator() {
+  const insets = useSafeAreaInsets();
   const [needsOnboarding, setNeedsOnboarding] = React.useState(true);
   const [activeTab, setActiveTab] = React.useState<TabKey>('Home');
 
   if (needsOnboarding) {
-    return (
-      <View className="flex-1 bg-slate-950">
-        <OnboardingScreen onComplete={() => setNeedsOnboarding(false)} />
-        <View className="px-6 pb-8">
-          <Pressable
-            className="rounded-2xl border border-emerald-500/40 bg-slate-900 py-3"
-            onPress={() => setNeedsOnboarding(false)}
-          >
-            <Text className="text-center font-semibold text-emerald-300">Enter Lume</Text>
-          </Pressable>
-        </View>
-      </View>
-    );
+    return <OnboardingScreen onComplete={() => setNeedsOnboarding(false)} />;
   }
 
   const renderActiveScreen = () => {
@@ -36,15 +39,21 @@ export function RootNavigator() {
   return (
     <View className="flex-1 bg-slate-950">
       <View className="flex-1">{renderActiveScreen()}</View>
-      <View className="h-16 flex-row border-t border-slate-800 bg-slate-900 px-3">
-        {(['Home', 'EchoFeed', 'Profile'] as TabKey[]).map((tab) => (
+
+      <View
+        className="flex-row border-t border-slate-800 bg-slate-900 px-2"
+        style={{ paddingBottom: Math.max(insets.bottom, 8), height: 66 + Math.max(insets.bottom, 8) }}
+      >
+        {TABS.map(({ key, label, Icon }) => (
           <Pressable
-            key={tab}
+            key={key}
             className="flex-1 items-center justify-center"
-            onPress={() => setActiveTab(tab)}
+            onPress={() => setActiveTab(key)}
+            style={({ pressed }) => ({ opacity: pressed ? 0.74 : 1 })}
           >
-            <Text className={activeTab === tab ? 'font-semibold text-emerald-400' : 'text-slate-400'}>
-              {tab === 'EchoFeed' ? 'Echoes' : tab}
+            <Icon size={18} color={activeTab === key ? '#34d399' : '#94a3b8'} />
+            <Text className={activeTab === key ? 'mt-1 font-semibold text-emerald-400' : 'mt-1 text-slate-400'}>
+              {label}
             </Text>
           </Pressable>
         ))}

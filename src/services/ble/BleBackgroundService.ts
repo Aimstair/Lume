@@ -19,6 +19,16 @@ const bleEmitter = new NativeEventEmitter(BleManagerModule);
 let subscriptions: Array<{ remove: () => void }> = [];
 let started = false;
 
+export async function getBleBackgroundLoopStatus(): Promise<boolean> {
+  try {
+    const advertiserActive = await BleAdvertiser.isActive();
+    started = started || advertiserActive;
+    return advertiserActive || started;
+  } catch {
+    return started;
+  }
+}
+
 function encodeUtf8ToBytes(value: string): number[] {
   return Array.from(new TextEncoder().encode(value));
 }
