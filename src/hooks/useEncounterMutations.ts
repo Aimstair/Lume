@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { localRepo } from '../db/repositories';
-import { newId } from '../services/id';
+import { newId, newUuid } from '../services/id';
 import { triggerSyncNow } from '../services/sync/syncEngine';
 import { session } from '../state/session';
 import { Encounter } from '../types/domain';
@@ -8,6 +8,7 @@ import { Encounter } from '../types/domain';
 type Input = {
   observedProfileId: string;
   observedMessageBody: string;
+  observedMessageDate?: string;
   observedRadianceScore: number;
   rssi: number | null;
 };
@@ -21,15 +22,22 @@ export function useAddEncounter() {
         throw new Error('Session not ready');
       }
 
+      const observedMessageDate = input.observedMessageDate ?? new Date().toISOString().slice(0, 10);
+
       const encounter: Encounter = {
-        id: newId('enc_'),
+        id: newUuid(),
         observerProfileId: session.profileId,
         observedProfileId: input.observedProfileId,
         observedMessageBody: input.observedMessageBody,
+        observedMessageDate,
         observedRadianceScore: input.observedRadianceScore,
         happenedAt: new Date().toISOString(),
         rssi: input.rssi,
         pendingSync: true,
+        seen: false,
+        pinned: false,
+        reported: false,
+        deleted: false,
       };
 
       localRepo.addEncounter(encounter);
@@ -60,15 +68,21 @@ export function useAddEncounter() {
 
       await queryClient.cancelQueries({ queryKey: ['echoFeed', session.profileId] });
       const previous = queryClient.getQueryData<Encounter[]>(['echoFeed', session.profileId]) ?? [];
+      const observedMessageDate = input.observedMessageDate ?? new Date().toISOString().slice(0, 10);
       const optimistic: Encounter = {
-        id: newId('enc_'),
+        id: newUuid(),
         observerProfileId: session.profileId,
         observedProfileId: input.observedProfileId,
         observedMessageBody: input.observedMessageBody,
+        observedMessageDate,
         observedRadianceScore: input.observedRadianceScore,
         happenedAt: new Date().toISOString(),
         rssi: input.rssi,
         pendingSync: true,
+        seen: false,
+        pinned: false,
+        reported: false,
+        deleted: false,
       };
       queryClient.setQueryData(['echoFeed', session.profileId], [optimistic, ...previous]);
       return { previous };

@@ -11,6 +11,24 @@ function lumeIdForUser(userId: string) {
   return `LUME-${compact}`;
 }
 
+function applyOfflineIdentity() {
+  const localId = 'offline-local-user';
+  const localLumeId = 'LUME-OFFLINE-LOCAL';
+
+  setSessionIdentity({
+    profileId: localId,
+    lumeId: localLumeId,
+  });
+
+  localRepo.upsertProfile({
+    id: localId,
+    lumeId: localLumeId,
+    displayName: 'Offline User',
+    radianceScore: 0,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 async function ensureRemoteProfile(user: AuthUser) {
   if (!supabase) {
     throw new Error('Supabase client unavailable');
@@ -66,45 +84,40 @@ async function resolveAuthenticatedUser() {
 
 export async function initializeAuthSession() {
   if (!supabase) {
-    const localId = 'offline-local-user';
-    const localLumeId = 'LUME-OFFLINE-LOCAL';
-
-    setSessionIdentity({
-      profileId: localId,
-      lumeId: localLumeId,
-    });
-
-    localRepo.upsertProfile({
-      id: localId,
-      lumeId: localLumeId,
-      displayName: 'Offline User',
-      radianceScore: 0,
-      createdAt: new Date().toISOString(),
-    });
+    applyOfflineIdentity();
 
     return () => {};
   }
 
-  const user = await resolveAuthenticatedUser();
+  try {
+    const user = await resolveAuthenticatedUser();
 
-  if (!user) {
-    clearSessionIdentity();
-    return () => {};
-  }
-
-  await ensureRemoteProfile(user);
-
-  const { data: subscription } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
-    const nextUser = nextSession?.user;
-    if (!nextUser) {
-      clearSessionIdentity();
-      return;
+    if (!user) {
+      applyOfflineIdentity();
+      return () => {};
     }
 
-    await ensureRemoteProfile(nextUser);
-  });
+    await ensureRemoteProfile(user);
 
-  return () => {
-    subscription.subscription.unsubscribe();
-  };
+    const { data: subscription } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+      const nextUser = nextSession?.user;
+      if (!nextUser) {
+        clearSessionIdentity();
+        return;
+      }
+
+      try {
+        await ensureRemoteProfile(nextUser);
+      } catch {
+        applyOfflineIdentity();
+      }
+    });
+
+    return () => {
+      subscription.subscription.unsubscribe();
+    };
+  } catch {
+    applyOfflineIdentity();
+    return () => {};
+  }
 }

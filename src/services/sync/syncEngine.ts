@@ -43,6 +43,35 @@ async function pushOutboxOnce() {
           if (error) throw error;
         }
 
+        if (item.opType === 'heart_reaction_by_target') {
+          const { data: message, error: lookupError } = await supabase
+            .from('messages')
+            .select('id')
+            .eq('profile_id', payload.observed_profile_id)
+            .eq('message_date', payload.message_date)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (lookupError) throw lookupError;
+          if (!message?.id) {
+            throw new Error('target message not available yet');
+          }
+
+          const { error } = await supabase.from('message_reactions').upsert(
+            {
+              message_id: message.id,
+              reactor_profile_id: payload.reactor_profile_id,
+              reaction: 'heart',
+            },
+            {
+              onConflict: 'message_id,reactor_profile_id',
+              ignoreDuplicates: false,
+            },
+          );
+          if (error) throw error;
+        }
+
         localRepo.removeOutbox(item.id);
       } catch (error: any) {
         localRepo.markOutboxError(item.id, error?.message ?? 'unknown sync error');

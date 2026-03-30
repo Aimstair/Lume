@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { localRepo } from '../db/repositories';
-import { newId } from '../services/id';
+import { newId, newUuid } from '../services/id';
 import { triggerSyncNow } from '../services/sync/syncEngine';
 import { session } from '../state/session';
 import { DailyMessage } from '../types/domain';
@@ -16,8 +16,13 @@ export function useUpsertDailyMessage() {
         throw new Error('Session not ready');
       }
 
+      const existing = localRepo.getTodayMessage(session.profileId);
+      if (existing) {
+        throw new Error('Daily message already saved');
+      }
+
       const today = new Date().toISOString().slice(0, 10);
-      const messageId = newId('msg_');
+      const messageId = newUuid();
 
       localRepo.upsertDailyMessage({
         id: messageId,
@@ -55,7 +60,7 @@ export function useUpsertDailyMessage() {
         queryClient.getQueryData<DailyMessage | null>(['todayMessage', session.profileId]) ?? null;
 
       const optimistic: DailyMessage = {
-        id: previous?.id ?? newId('msg_'),
+        id: previous?.id ?? newUuid(),
         profileId: session.profileId,
         body,
         messageDate: new Date().toISOString().slice(0, 10),
@@ -74,6 +79,8 @@ export function useUpsertDailyMessage() {
 
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ['todayMessage', session.profileId] });
+      await queryClient.invalidateQueries({ queryKey: ['messageHistory', session.profileId] });
+      await queryClient.invalidateQueries({ queryKey: ['profileStats', session.profileId] });
     },
   });
 }

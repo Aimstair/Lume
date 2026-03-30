@@ -45,12 +45,57 @@ export function initLocalDb() {
       observer_profile_id TEXT NOT NULL,
       observed_profile_id TEXT NOT NULL,
       observed_message_body TEXT NOT NULL,
+      observed_message_date TEXT NOT NULL,
       observed_radiance_score INTEGER NOT NULL,
       happened_at TEXT NOT NULL,
       rssi INTEGER,
-      pending_sync INTEGER NOT NULL DEFAULT 1
+      pending_sync INTEGER NOT NULL DEFAULT 1,
+      is_seen INTEGER NOT NULL DEFAULT 0,
+      is_pinned INTEGER NOT NULL DEFAULT 0,
+      is_reported INTEGER NOT NULL DEFAULT 0,
+      is_deleted INTEGER NOT NULL DEFAULT 0
     );
   `);
+
+  try {
+    conn.execute(
+      'ALTER TABLE local_encounters ADD COLUMN observed_message_date TEXT NOT NULL DEFAULT "";',
+    );
+  } catch {
+    // Column already exists on upgraded installs.
+  }
+
+  try {
+    conn.execute(
+      'UPDATE local_encounters SET observed_message_date = substr(happened_at, 1, 10) WHERE observed_message_date = "" OR observed_message_date IS NULL;',
+    );
+  } catch {
+    // no-op
+  }
+
+  try {
+    conn.execute('ALTER TABLE local_encounters ADD COLUMN is_seen INTEGER NOT NULL DEFAULT 0;');
+  } catch {
+    // Column already exists on upgraded installs.
+  }
+
+  try {
+    conn.execute('ALTER TABLE local_encounters ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;');
+  } catch {
+    // Column already exists on upgraded installs.
+  }
+
+  try {
+    conn.execute('ALTER TABLE local_encounters ADD COLUMN is_reported INTEGER NOT NULL DEFAULT 0;');
+  } catch {
+    // Column already exists on upgraded installs.
+  }
+
+  try {
+    conn.execute('ALTER TABLE local_encounters ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;');
+  } catch {
+    // Column already exists on upgraded installs.
+  }
 
   conn.execute(`
     CREATE TABLE IF NOT EXISTS sync_outbox (

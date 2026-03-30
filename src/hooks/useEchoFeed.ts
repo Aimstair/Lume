@@ -9,5 +9,6 @@ export function useEchoFeed() {
     queryFn: async () => localRepo.listEncountersForFeed(session.profileId),
     enabled: session.isReady,
     initialData: [],
+    refetchInterval: session.isReady ? 2_500 : false,
   });
 }

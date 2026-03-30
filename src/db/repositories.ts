@@ -3,7 +3,7 @@ import { inSql } from './localDb';
 
 type OutboxItem = {
   id: string;
-  opType: 'upsert_daily_message' | 'insert_encounter' | 'heart_reaction';
+  opType: 'upsert_daily_message' | 'insert_encounter' | 'heart_reaction' | 'heart_reaction_by_target';
   tableName: 'messages' | 'encounters' | 'message_reactions';
   payloadJson: string;
   createdAt: string;
@@ -149,21 +149,31 @@ export const localRepo = {
           observer_profile_id,
           observed_profile_id,
           observed_message_body,
+          observed_message_date,
           observed_radiance_score,
           happened_at,
           rssi,
-          pending_sync
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+          pending_sync,
+          is_seen,
+          is_pinned,
+          is_reported,
+          is_deleted
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         `,
         [
           encounter.id,
           encounter.observerProfileId,
           encounter.observedProfileId,
           encounter.observedMessageBody,
+          encounter.observedMessageDate,
           encounter.observedRadianceScore,
           encounter.happenedAt,
           encounter.rssi,
           toFlag(encounter.pendingSync),
+          toFlag(encounter.seen),
+          toFlag(encounter.pinned),
+          toFlag(encounter.reported),
+          toFlag(encounter.deleted),
         ],
       );
     });
@@ -172,7 +182,15 @@ export const localRepo = {
   listEncountersForFeed(observerProfileId: string): Encounter[] {
     return inSql((db) => {
       const result = db.execute(
-        'SELECT * FROM local_encounters WHERE observer_profile_id = ? ORDER BY happened_at DESC LIMIT 100;',
+        `
+        SELECT *
+        FROM local_encounters
+        WHERE observer_profile_id = ?
+          AND is_deleted = 0
+          AND is_reported = 0
+        ORDER BY happened_at DESC
+        LIMIT 100;
+        `,
         [observerProfileId],
       );
       const rows = result.rows?._array ?? [];
@@ -181,11 +199,155 @@ export const localRepo = {
         observerProfileId: row.observer_profile_id,
         observedProfileId: row.observed_profile_id,
         observedMessageBody: row.observed_message_body,
+        observedMessageDate: row.observed_message_date,
         observedRadianceScore: row.observed_radiance_score,
         happenedAt: row.happened_at,
         rssi: row.rssi,
         pendingSync: row.pending_sync === 1,
+        seen: row.is_seen === 1,
+        pinned: row.is_pinned === 1,
+        reported: row.is_reported === 1,
+        deleted: row.is_deleted === 1,
       }));
+    });
+  },
+
+  listUnseenEncounters(observerProfileId: string, limit = 50): Encounter[] {
+    return inSql((db) => {
+      const result = db.execute(
+        `
+        SELECT *
+        FROM local_encounters
+        WHERE observer_profile_id = ?
+          AND is_seen = 0
+          AND is_deleted = 0
+          AND is_reported = 0
+        ORDER BY happened_at DESC
+        LIMIT ?;
+        `,
+        [observerProfileId, limit],
+      );
+
+      const rows = result.rows?._array ?? [];
+      return rows.map((row: any) => ({
+        id: row.id,
+        observerProfileId: row.observer_profile_id,
+        observedProfileId: row.observed_profile_id,
+        observedMessageBody: row.observed_message_body,
+        observedMessageDate: row.observed_message_date,
+        observedRadianceScore: row.observed_radiance_score,
+        happenedAt: row.happened_at,
+        rssi: row.rssi,
+        pendingSync: row.pending_sync === 1,
+        seen: row.is_seen === 1,
+        pinned: row.is_pinned === 1,
+        reported: row.is_reported === 1,
+        deleted: row.is_deleted === 1,
+      }));
+    });
+  },
+
+  listPinnedEncounters(observerProfileId: string, limit = 200): Encounter[] {
+    return inSql((db) => {
+      const result = db.execute(
+        `
+        SELECT *
+        FROM local_encounters
+        WHERE observer_profile_id = ?
+          AND is_pinned = 1
+          AND is_deleted = 0
+          AND is_reported = 0
+        ORDER BY happened_at DESC
+        LIMIT ?;
+        `,
+        [observerProfileId, limit],
+      );
+
+      const rows = result.rows?._array ?? [];
+      return rows.map((row: any) => ({
+        id: row.id,
+        observerProfileId: row.observer_profile_id,
+        observedProfileId: row.observed_profile_id,
+        observedMessageBody: row.observed_message_body,
+        observedMessageDate: row.observed_message_date,
+        observedRadianceScore: row.observed_radiance_score,
+        happenedAt: row.happened_at,
+        rssi: row.rssi,
+        pendingSync: row.pending_sync === 1,
+        seen: row.is_seen === 1,
+        pinned: row.is_pinned === 1,
+        reported: row.is_reported === 1,
+        deleted: row.is_deleted === 1,
+      }));
+    });
+  },
+
+  countUnseenEncounters(observerProfileId: string) {
+    return inSql((db) => {
+      const result = db.execute(
+        `
+        SELECT COUNT(*) AS total
+        FROM local_encounters
+        WHERE observer_profile_id = ?
+          AND is_seen = 0
+          AND is_deleted = 0
+          AND is_reported = 0;
+        `,
+        [observerProfileId],
+      );
+      const row = result.rows?._array?.[0];
+      return Number(row?.total ?? 0);
+    });
+  },
+
+  hasEncounterForMessageDay(observerProfileId: string, observedProfileId: string, observedMessageDate: string) {
+    return inSql((db) => {
+      const result = db.execute(
+        `
+        SELECT id
+        FROM local_encounters
+        WHERE observer_profile_id = ?
+          AND observed_profile_id = ?
+          AND observed_message_date = ?
+          AND is_deleted = 0
+        LIMIT 1;
+        `,
+        [observerProfileId, observedProfileId, observedMessageDate],
+      );
+      return Boolean(result.rows?._array?.[0]?.id);
+    });
+  },
+
+  markEncounterSeen(encounterId: string) {
+    inSql((db) => {
+      db.execute('UPDATE local_encounters SET is_seen = 1 WHERE id = ?;', [encounterId]);
+    });
+  },
+
+  pinEncounter(encounterId: string) {
+    inSql((db) => {
+      db.execute(
+        'UPDATE local_encounters SET is_seen = 1, is_pinned = 1, is_reported = 0, is_deleted = 0 WHERE id = ?;',
+        [encounterId],
+      );
+    });
+  },
+
+  reportEncounter(encounterId: string) {
+    inSql((db) => {
+      db.execute(
+        'UPDATE local_encounters SET is_seen = 1, is_reported = 1, is_pinned = 0 WHERE id = ?;',
+        [encounterId],
+      );
+    });
+  },
+
+  deleteEncounter(encounterId: string) {
+    inSql((db) => {
+      db.execute(
+        'UPDATE local_encounters SET is_seen = 1, is_deleted = 1, is_pinned = 0 WHERE id = ?;',
+        [encounterId],
+      );
     });
   },
 

@@ -21,10 +21,15 @@ export type Encounter = {
   observerProfileId: string;
   observedProfileId: string;
   observedMessageBody: string;
+  observedMessageDate: string;
   observedRadianceScore: number;
   happenedAt: string;
   rssi: number | null;
   pendingSync: boolean;
+  seen: boolean;
+  pinned: boolean;
+  reported: boolean;
+  deleted: boolean;
 };
 
 export type PermissionState = {

@@ -1,11 +1,15 @@
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { AppState, Pressable, Text, View } from 'react-native';
 import { HomeScreen } from '../screens/HomeScreen';
 import { EchoFeedScreen } from '../screens/EchoFeedScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { House, Radar, UserRound } from 'lucide-react-native';
+import { useUnseenEchoes } from '../hooks/useEchoInbox';
+import { useEchoInboxActions } from '../hooks/useEchoInboxActions';
+import { EchoInboxPrompt } from '../components/EchoInboxPrompt';
+import { EchoSwipeDeckModal } from '../components/EchoSwipeDeckModal';
 
 type TabKey = 'Home' | 'EchoFeed' | 'Profile';
 
@@ -25,6 +29,52 @@ export function RootNavigator() {
   const insets = useSafeAreaInsets();
   const [needsOnboarding, setNeedsOnboarding] = React.useState(true);
   const [activeTab, setActiveTab] = React.useState<TabKey>('Home');
+  const [inboxPromptVisible, setInboxPromptVisible] = React.useState(false);
+  const [deckVisible, setDeckVisible] = React.useState(false);
+  const [largestPromptedCount, setLargestPromptedCount] = React.useState(0);
+  const unseenEchoes = useUnseenEchoes();
+  const { pinEcho, reportEcho, deleteEcho } = useEchoInboxActions();
+
+  const unseenCount = unseenEchoes.data.length;
+
+  React.useEffect(() => {
+    if (needsOnboarding || deckVisible) {
+      return;
+    }
+
+    if (unseenCount === 0) {
+      setInboxPromptVisible(false);
+      setLargestPromptedCount(0);
+      return;
+    }
+
+    if (unseenCount > largestPromptedCount) {
+      setInboxPromptVisible(true);
+      setLargestPromptedCount(unseenCount);
+    }
+  }, [deckVisible, largestPromptedCount, needsOnboarding, unseenCount]);
+
+  React.useEffect(() => {
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && unseenCount > 0 && !needsOnboarding && !deckVisible) {
+        setInboxPromptVisible(true);
+      }
+    });
+
+    return () => {
+      appStateSub.remove();
+    };
+  }, [deckVisible, needsOnboarding, unseenCount]);
+
+  const openSwipeInbox = React.useCallback(() => {
+    setInboxPromptVisible(false);
+    setDeckVisible(true);
+    setActiveTab('EchoFeed');
+  }, []);
+
+  const closeSwipeInbox = React.useCallback(() => {
+    setDeckVisible(false);
+  }, []);
 
   if (needsOnboarding) {
     return <OnboardingScreen onComplete={() => setNeedsOnboarding(false)} />;
@@ -32,7 +82,9 @@ export function RootNavigator() {
 
   const renderActiveScreen = () => {
     if (activeTab === 'Home') return <HomeScreen />;
-    if (activeTab === 'EchoFeed') return <EchoFeedScreen />;
+    if (activeTab === 'EchoFeed') {
+      return <EchoFeedScreen onOpenInbox={openSwipeInbox} unreadCount={unseenCount} />;
+    }
     return <ProfileScreen />;
   };
 
@@ -40,9 +92,25 @@ export function RootNavigator() {
     <View className="flex-1 bg-slate-950">
       <View className="flex-1">{renderActiveScreen()}</View>
 
+      <EchoInboxPrompt
+        visible={inboxPromptVisible}
+        unseenCount={unseenCount}
+        onDismiss={() => setInboxPromptVisible(false)}
+        onOpenInbox={openSwipeInbox}
+      />
+
+      <EchoSwipeDeckModal
+        visible={deckVisible}
+        echoes={unseenEchoes.data}
+        onClose={closeSwipeInbox}
+        onPin={pinEcho}
+        onReport={reportEcho}
+        onDelete={deleteEcho}
+      />
+
       <View
-        className="flex-row border-t border-slate-800 bg-slate-900 px-2"
-        style={{ paddingBottom: Math.max(insets.bottom, 8), height: 66 + Math.max(insets.bottom, 8) }}
+        className="flex-row border-t border-slate-800 bg-slate-900 px-2 py-4 items-center justify-center"
+        style={{ paddingBottom: Math.max(insets.bottom, 8), height: 45 + Math.max(insets.bottom, 8) }}
       >
         {TABS.map(({ key, label, Icon }) => (
           <Pressable

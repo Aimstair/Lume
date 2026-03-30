@@ -1,10 +1,9 @@
 import React from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, FlatList, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { Compass, ShieldCheck, Sparkles } from 'lucide-react-native';
 import {
   getPermissionState,
-  requestBluetoothPermissions,
-  requestLocationPermission,
+  requestRadarPermissions,
   requestNotificationPermission,
 } from '../services/permissions';
 import { PermissionState } from '../types/domain';
@@ -54,9 +53,28 @@ export function OnboardingScreen({ onComplete }: { onComplete?: () => void }) {
   const [hasRequestedCorePermissions, setHasRequestedCorePermissions] = React.useState(false);
   const [permissions, setPermissions] = React.useState<PermissionState>(EMPTY_PERMISSIONS);
 
-  React.useEffect(() => {
-    getPermissionState().then(setPermissions).catch(() => setPermissions(EMPTY_PERMISSIONS));
+  const refreshPermissions = React.useCallback(async () => {
+    try {
+      const next = await getPermissionState();
+      setPermissions(next);
+    } catch {
+      setPermissions(EMPTY_PERMISSIONS);
+    }
   }, []);
+
+  React.useEffect(() => {
+    refreshPermissions();
+
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void refreshPermissions();
+      }
+    });
+
+    return () => {
+      appStateSub.remove();
+    };
+  }, [refreshPermissions]);
 
   const coreGranted = permissions.bluetoothGranted && permissions.locationGranted;
   const canEnter = coreGranted || hasRequestedCorePermissions;
@@ -71,13 +89,11 @@ export function OnboardingScreen({ onComplete }: { onComplete?: () => void }) {
     setHasRequestedCorePermissions(true);
 
     try {
-      const bluetoothGranted = await requestBluetoothPermissions();
-      const locationGranted = await requestLocationPermission();
+      const coreAccessReady = await requestRadarPermissions();
       await requestNotificationPermission();
-      const nextPermissions = await getPermissionState();
-      setPermissions(nextPermissions);
+      await refreshPermissions();
 
-      if (!bluetoothGranted || !locationGranted) {
+      if (!coreAccessReady) {
         Alert.alert(
           'Limited mode available',
           'You can still enter Lume without permissions. Radar and BLE exchange will stay off until granted.',
@@ -128,29 +144,31 @@ export function OnboardingScreen({ onComplete }: { onComplete?: () => void }) {
 
         <View className="mb-3 rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
           <Text className="text-slate-400">
-            Bluetooth: <Text className={permissions.bluetoothGranted ? 'text-emerald-400' : 'text-slate-300'}>{permissions.bluetoothGranted ? 'On' : 'Off'}</Text>
-            {'  '}Location: <Text className={permissions.locationGranted ? 'text-emerald-400' : 'text-slate-300'}>{permissions.locationGranted ? 'On' : 'Off'}</Text>
+            Bluetooth: <Text className={permissions.bluetoothGranted ? 'text-emerald-400' : 'text-rose-300'}>{permissions.bluetoothGranted ? 'On' : 'Off'}</Text>
+            {'  '}Location: <Text className={permissions.locationGranted ? 'text-emerald-400' : 'text-rose-300'}>{permissions.locationGranted ? 'On' : 'Off'}</Text>
           </Text>
         </View>
 
-        <Pressable
-          onPress={requestCorePermissions}
-          disabled={isRequesting}
-          style={({ pressed }) => ({ opacity: pressed ? 0.84 : 1 })}
-          className={isRequesting ? 'rounded-2xl bg-emerald-400/70 py-4' : 'rounded-2xl bg-emerald-400 py-4'}
-        >
-          <View className="flex-row items-center justify-center">
-            {isRequesting ? <ActivityIndicator color="#020617" size="small" /> : null}
-            <Text className="ml-2 text-center text-base font-bold text-slate-950">
-              {isRequesting ? 'Requesting Permissions...' : 'Request BLE + Location'}
-            </Text>
-          </View>
-        </Pressable>
+        {!coreGranted ? (
+          <Pressable
+            onPress={requestCorePermissions}
+            disabled={isRequesting}
+            style={({ pressed }) => ({ opacity: pressed ? 0.84 : 1 })}
+            className={isRequesting ? 'rounded-2xl bg-emerald-400/70 py-4' : 'rounded-2xl bg-emerald-400 py-4'}
+          >
+            <View className="flex-row items-center justify-center">
+              {isRequesting ? <ActivityIndicator color="#020617" size="small" /> : null}
+              <Text className="ml-2 text-center text-base font-bold text-slate-950">
+                {isRequesting ? 'Turning On Access...' : 'Turn On Bluetooth + Location'}
+              </Text>
+            </View>
+          </Pressable>
+        ) : null}
 
         <Pressable
           onPress={() => onComplete?.()}
           disabled={!canEnter}
-          style={({ pressed }) => ({ opacity: pressed ? 0.84 : 1 })}
+          style={({ pressed }) => ({ opacity: pressed ? 0.84 : 1, marginTop: coreGranted ? 0 : 12 })}
           className={canEnter ? 'mt-3 rounded-2xl border border-emerald-400/40 bg-slate-900 py-4' : 'mt-3 rounded-2xl border border-slate-700 bg-slate-900 py-4'}
         >
           <Text className={canEnter ? 'text-center font-semibold text-emerald-300' : 'text-center font-semibold text-slate-500'}>
