@@ -1,6 +1,130 @@
 import React from 'react';
-import { Animated, Easing, Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  interpolate,
+  withDelay,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+  type SharedValue,
+} from 'react-native-reanimated';
+
+type AuraTierKey = 'spark' | 'glow' | 'supernova';
+
+type AuraTier = {
+  key: AuraTierKey;
+  label: string;
+  outerRing: [string, string, string];
+  innerRing: [string, string, string];
+  core: [string, string, string];
+  sparkleColor: string;
+  sweep: [string, string, string];
+  ringBorder: string;
+};
+
+const AURA_TIERS: Record<AuraTierKey, AuraTier> = {
+  spark: {
+    key: 'spark',
+    label: 'Spark',
+    outerRing: ['rgba(125,211,252,0.34)', 'rgba(8,145,178,0.14)', 'rgba(15,23,42,0.02)'],
+    innerRing: ['rgba(56,189,248,0.3)', 'rgba(14,116,144,0.22)', 'rgba(15,23,42,0.09)'],
+    core: ['#bae6fd', '#38bdf8', '#0e7490'],
+    sparkleColor: '#e0f2fe',
+    sweep: ['rgba(56,189,248,0)', 'rgba(125,211,252,0.95)', 'rgba(56,189,248,0)'],
+    ringBorder: 'rgba(186,230,253,0.55)',
+  },
+  glow: {
+    key: 'glow',
+    label: 'Glow',
+    outerRing: ['rgba(110,231,183,0.35)', 'rgba(16,185,129,0.12)', 'rgba(15,23,42,0.02)'],
+    innerRing: ['rgba(16,185,129,0.3)', 'rgba(5,150,105,0.2)', 'rgba(15,23,42,0.09)'],
+    core: ['#6ee7b7', '#34d399', '#059669'],
+    sparkleColor: '#bbf7d0',
+    sweep: ['rgba(16,185,129,0)', 'rgba(52,211,153,0.95)', 'rgba(16,185,129,0)'],
+    ringBorder: 'rgba(167,243,208,0.55)',
+  },
+  supernova: {
+    key: 'supernova',
+    label: 'Supernova',
+    outerRing: ['rgba(253,186,116,0.38)', 'rgba(249,115,22,0.16)', 'rgba(15,23,42,0.02)'],
+    innerRing: ['rgba(251,146,60,0.34)', 'rgba(234,88,12,0.23)', 'rgba(15,23,42,0.1)'],
+    core: ['#fde68a', '#fb923c', '#ea580c'],
+    sparkleColor: '#fef3c7',
+    sweep: ['rgba(251,146,60,0)', 'rgba(254,215,170,0.95)', 'rgba(251,146,60,0)'],
+    ringBorder: 'rgba(254,215,170,0.6)',
+  },
+};
+
+const SPARKLE_LAYOUT = [
+  { leftRatio: 0.14, topRatio: 0.13, scale: 0.9, phase: 0.1 },
+  { leftRatio: 0.76, topRatio: 0.24, scale: 1, phase: 0.35 },
+  { leftRatio: 0.72, topRatio: 0.72, scale: 1.15, phase: 0.6 },
+  { leftRatio: 0.2, topRatio: 0.78, scale: 0.85, phase: 0.85 },
+];
+
+function resolveAuraTier(radianceScore: number) {
+  if (radianceScore >= 500) {
+    return AURA_TIERS.supernova;
+  }
+
+  if (radianceScore >= 100) {
+    return AURA_TIERS.glow;
+  }
+
+  return AURA_TIERS.spark;
+}
+
+type SparkleDotProps = {
+  left: number;
+  top: number;
+  size: number;
+  scale: number;
+  color: string;
+  phase: number;
+  twinkleProgress: SharedValue<number>;
+};
+
+const SparkleDot = React.memo(function SparkleDot({
+  left,
+  top,
+  size,
+  scale,
+  color,
+  phase,
+  twinkleProgress,
+}: SparkleDotProps) {
+  const sparkleStyle = useAnimatedStyle(() => {
+    const wave = Math.sin((twinkleProgress.value + phase) * Math.PI * 2);
+    const opacity = interpolate(wave, [-1, 1], [0.25, 1]);
+    const pulseScale = interpolate(wave, [-1, 1], [0.8, 1.35]);
+
+    return {
+      opacity,
+      transform: [{ scale: pulseScale * scale }],
+    };
+  }, [phase, scale, twinkleProgress]);
+
+  return (
+    <Animated.View
+      className="absolute rounded-full"
+      style={[
+        {
+          left,
+          top,
+          width: size,
+          height: size,
+          backgroundColor: color,
+        },
+        sparkleStyle,
+      ]}
+    />
+  );
+});
 
 type AuraVisualizerProps = {
   isActive: boolean;
@@ -8,6 +132,7 @@ type AuraVisualizerProps = {
   onPress?: () => void;
   disabled?: boolean;
   isBusy?: boolean;
+  radianceScore?: number;
 };
 
 export function AuraVisualizer({
@@ -16,172 +141,166 @@ export function AuraVisualizer({
   onPress,
   disabled,
   isBusy,
+  radianceScore = 0,
 }: AuraVisualizerProps) {
-  const outerPulse = React.useRef(new Animated.Value(1)).current;
-  const innerPulse = React.useRef(new Animated.Value(1)).current;
-  const sweepRotation = React.useRef(new Animated.Value(0)).current;
-  const sparkleValues = React.useRef([
-    new Animated.Value(0.45),
-    new Animated.Value(0.5),
-    new Animated.Value(0.55),
-    new Animated.Value(0.5),
-  ]).current;
-  const outerLoopRef = React.useRef<Animated.CompositeAnimation | null>(null);
-  const innerLoopRef = React.useRef<Animated.CompositeAnimation | null>(null);
-  const sweepLoopRef = React.useRef<Animated.CompositeAnimation | null>(null);
-  const sparkleLoopsRef = React.useRef<Animated.CompositeAnimation[]>([]);
+  const tier = React.useMemo(() => resolveAuraTier(Math.max(0, Math.floor(radianceScore))), [radianceScore]);
+
+  const outerPulse = useSharedValue(1);
+  const innerPulse = useSharedValue(1);
+  const corePulse = useSharedValue(1);
+  const sweepRotation = useSharedValue(0);
+  const twinkleProgress = useSharedValue(0);
+  const tierPulse = useSharedValue(0);
+  const pulseWaveA = useSharedValue(0);
+  const pulseWaveB = useSharedValue(0);
 
   const outerSize = size;
   const innerSize = Math.round(size * 0.72);
   const coreSize = Math.round(size * 0.42);
 
-  const sweepRotate = sweepRotation.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
-
-  const sparklePositions = React.useMemo(
-    () => [
-      { left: Math.round(size * 0.14), top: Math.round(size * 0.13), scale: 0.9 },
-      { left: Math.round(size * 0.76), top: Math.round(size * 0.24), scale: 1 },
-      { left: Math.round(size * 0.72), top: Math.round(size * 0.72), scale: 1.15 },
-      { left: Math.round(size * 0.2), top: Math.round(size * 0.78), scale: 0.85 },
-    ],
-    [size],
-  );
+  const sparkleSize = Math.round(size * 0.022);
 
   React.useEffect(() => {
-    outerLoopRef.current?.stop();
-    innerLoopRef.current?.stop();
-    sweepLoopRef.current?.stop();
+    cancelAnimation(outerPulse);
+    cancelAnimation(innerPulse);
+    cancelAnimation(corePulse);
+    cancelAnimation(sweepRotation);
+    cancelAnimation(twinkleProgress);
+    cancelAnimation(pulseWaveA);
+    cancelAnimation(pulseWaveB);
 
     if (isActive) {
-      const outerLoop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(outerPulse, {
-            toValue: 1.08,
-            duration: 1100,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(outerPulse, {
-            toValue: 1,
-            duration: 1100,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ]),
+      outerPulse.value = withRepeat(
+        withSequence(
+          withTiming(1.08, { duration: 1050, easing: Easing.inOut(Easing.ease) }),
+          withTiming(1, { duration: 1050, easing: Easing.inOut(Easing.ease) }),
+        ),
+        -1,
+        false,
       );
 
-      const innerLoop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(innerPulse, {
-            toValue: 1.05,
-            duration: 900,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(innerPulse, {
-            toValue: 1,
-            duration: 900,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ]),
+      innerPulse.value = withRepeat(
+        withSequence(
+          withTiming(1.05, { duration: 900, easing: Easing.inOut(Easing.ease) }),
+          withTiming(1, { duration: 900, easing: Easing.inOut(Easing.ease) }),
+        ),
+        -1,
+        false,
       );
 
-      outerLoopRef.current = outerLoop;
-      innerLoopRef.current = innerLoop;
+      corePulse.value = withRepeat(
+        withSequence(
+          withTiming(1.04, { duration: 760, easing: Easing.inOut(Easing.ease) }),
+          withTiming(1, { duration: 760, easing: Easing.inOut(Easing.ease) }),
+        ),
+        -1,
+        false,
+      );
 
-      const sweepLoop = Animated.loop(
-        Animated.timing(sweepRotation, {
-          toValue: 1,
-          duration: 3600,
-          easing: Easing.linear,
-          useNativeDriver: true,
+      sweepRotation.value = 0;
+      sweepRotation.value = withRepeat(
+        withSequence(
+          withTiming(1, {
+            duration: 1800,
+            easing: Easing.linear,
+          }),
+          withTiming(0, {
+            duration: 0,
+            easing: Easing.linear,
+          }),
+        ),
+        -1,
+        false,
+      );
+
+      twinkleProgress.value = withRepeat(
+        withTiming(1, {
+          duration: 1650,
+          easing: Easing.inOut(Easing.ease),
         }),
+        -1,
+        true,
       );
-      sweepLoopRef.current = sweepLoop;
 
-      outerLoop.start();
-      innerLoop.start();
-      sweepLoop.start();
+      pulseWaveA.value = 0;
+      pulseWaveA.value = withRepeat(
+        withTiming(1, {
+          duration: 2100,
+          easing: Easing.linear,
+        }),
+        -1,
+        false,
+      );
 
-      return () => {
-        outerLoop.stop();
-        innerLoop.stop();
-        sweepLoop.stop();
-      };
+      pulseWaveB.value = 0;
+      pulseWaveB.value = withDelay(
+        1000,
+        withRepeat(
+          withTiming(1, {
+            duration: 2100,
+            easing: Easing.linear,
+          }),
+          -1,
+          false,
+        ),
+      );
+
+      return;
     }
 
-    Animated.parallel([
-      Animated.timing(outerPulse, {
-        toValue: 1,
-        duration: 240,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }),
-      Animated.timing(innerPulse, {
-        toValue: 1,
-        duration: 240,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }),
-      Animated.timing(sweepRotation, {
-        toValue: 0,
-        duration: 250,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    return () => {
-      outerLoopRef.current?.stop();
-      innerLoopRef.current?.stop();
-      sweepLoopRef.current?.stop();
-    };
-  }, [innerPulse, isActive, outerPulse, sweepRotation]);
+    outerPulse.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.ease) });
+    innerPulse.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.ease) });
+    corePulse.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.ease) });
+    sweepRotation.value = withTiming(0, { duration: 250, easing: Easing.out(Easing.ease) });
+    twinkleProgress.value = withTiming(0.35, { duration: 280, easing: Easing.out(Easing.ease) });
+    pulseWaveA.value = withTiming(0, { duration: 220, easing: Easing.out(Easing.ease) });
+    pulseWaveB.value = withTiming(0, { duration: 220, easing: Easing.out(Easing.ease) });
+  }, [
+    corePulse,
+    innerPulse,
+    isActive,
+    outerPulse,
+    pulseWaveA,
+    pulseWaveB,
+    sweepRotation,
+    twinkleProgress,
+  ]);
 
   React.useEffect(() => {
-    sparkleLoopsRef.current.forEach((loop) => loop.stop());
+    tierPulse.value = 0;
+    tierPulse.value = withSequence(
+      withTiming(1, { duration: 200, easing: Easing.out(Easing.ease) }),
+      withTiming(0, { duration: 260, easing: Easing.in(Easing.ease) }),
+    );
+  }, [tier.key, tierPulse]);
 
-    sparkleLoopsRef.current = sparkleValues.map((value, index) => {
-      const peak = isActive ? 1 : 0.72;
-      const base = isActive ? 0.3 : 0.2;
-      return Animated.loop(
-        Animated.sequence([
-          Animated.timing(value, {
-            toValue: peak,
-            duration: 520 + index * 130,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(value, {
-            toValue: base,
-            duration: 620 + index * 160,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ]),
-      );
-    });
+  const outerStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: outerPulse.value }],
+    opacity: isActive ? 0.9 : 0.62,
+  }));
 
-    sparkleLoopsRef.current.forEach((loop) => loop.start());
-
-    return () => {
-      sparkleLoopsRef.current.forEach((loop) => loop.stop());
-    };
-  }, [isActive, sparkleValues]);
-
-  const outerStyle = {
-    transform: [{ scale: outerPulse }],
-    opacity: isActive ? 0.9 : 0.6,
-  };
-
-  const innerStyle = {
-    transform: [{ scale: innerPulse }],
+  const innerStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: innerPulse.value }],
     opacity: isActive ? 1 : 0.85,
-  };
+  }));
+
+  const sweepStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${sweepRotation.value * 360}deg` }],
+  }));
+
+  const coreStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: corePulse.value + tierPulse.value * 0.05 }],
+  }));
+
+  const pulseWaveAStyle = useAnimatedStyle(() => ({
+    opacity: isActive ? interpolate(pulseWaveA.value, [0, 1], [0.42, 0]) : 0,
+    transform: [{ scale: 0.62 + pulseWaveA.value * 0.9 }],
+  }));
+
+  const pulseWaveBStyle = useAnimatedStyle(() => ({
+    opacity: isActive ? interpolate(pulseWaveB.value, [0, 1], [0.35, 0]) : 0,
+    transform: [{ scale: 0.7 + pulseWaveB.value * 0.86 }],
+  }));
 
   return (
     <Pressable
@@ -198,31 +317,58 @@ export function AuraVisualizer({
       accessibilityHint="Tap to turn radar on or off"
     >
       <View className="items-center justify-center" style={{ width: size, height: size }}>
-        {sparklePositions.map((position, index) => (
-          <Animated.View
+        <Animated.View
+          className="absolute rounded-full border"
+          style={[
+            {
+              width: Math.round(size * 0.84),
+              height: Math.round(size * 0.84),
+              borderColor: tier.ringBorder,
+            },
+            pulseWaveAStyle,
+          ]}
+          pointerEvents="none"
+        />
+
+        <Animated.View
+          className="absolute rounded-full border"
+          style={[
+            {
+              width: Math.round(size * 0.76),
+              height: Math.round(size * 0.76),
+              borderColor: tier.ringBorder,
+            },
+            pulseWaveBStyle,
+          ]}
+          pointerEvents="none"
+        />
+
+        {SPARKLE_LAYOUT.map((position, index) => (
+          <SparkleDot
             key={`sparkle-${index}`}
-            className="absolute rounded-full bg-emerald-300"
-            style={{
-              left: position.left,
-              top: position.top,
-              width: Math.round(size * 0.022),
-              height: Math.round(size * 0.022),
-              opacity: sparkleValues[index],
-              transform: [{ scale: sparkleValues[index] }, { scale: position.scale }],
-            }}
+            left={Math.round(size * position.leftRatio)}
+            top={Math.round(size * position.topRatio)}
+            size={sparkleSize}
+            scale={position.scale}
+            phase={position.phase}
+            color={tier.sparkleColor}
+            twinkleProgress={twinkleProgress}
           />
         ))}
 
         <Animated.View
-          className="absolute overflow-hidden rounded-full border border-emerald-300/45"
-          style={[{ width: outerSize, height: outerSize }, outerStyle]}
+          className="absolute overflow-hidden rounded-full border"
+          style={[
+            {
+              width: outerSize,
+              height: outerSize,
+              borderColor: tier.ringBorder,
+            },
+            outerStyle,
+          ]}
         >
           <LinearGradient
-            colors={
-              isActive
-                ? ['rgba(110,231,183,0.35)', 'rgba(16,185,129,0.11)', 'rgba(15,23,42,0.02)']
-                : ['rgba(71,85,105,0.2)', 'rgba(30,41,59,0.1)', 'rgba(15,23,42,0.02)']
-            }
+            colors={isActive ? tier.outerRing : ['rgba(71,85,105,0.2)', 'rgba(30,41,59,0.1)', 'rgba(15,23,42,0.02)']}
             start={{ x: 0.2, y: 0 }}
             end={{ x: 0.8, y: 1 }}
             style={{ flex: 1 }}
@@ -230,15 +376,18 @@ export function AuraVisualizer({
         </Animated.View>
 
         <Animated.View
-          className="absolute overflow-hidden rounded-full border border-emerald-300/55"
-          style={[{ width: innerSize, height: innerSize }, innerStyle]}
+          className="absolute overflow-hidden rounded-full border"
+          style={[
+            {
+              width: innerSize,
+              height: innerSize,
+              borderColor: tier.ringBorder,
+            },
+            innerStyle,
+          ]}
         >
           <LinearGradient
-            colors={
-              isActive
-                ? ['rgba(16,185,129,0.3)', 'rgba(5,150,105,0.2)', 'rgba(15,23,42,0.08)']
-                : ['rgba(100,116,139,0.24)', 'rgba(71,85,105,0.15)', 'rgba(15,23,42,0.08)']
-            }
+            colors={isActive ? tier.innerRing : ['rgba(100,116,139,0.24)', 'rgba(71,85,105,0.15)', 'rgba(15,23,42,0.08)']}
             start={{ x: 0, y: 0.2 }}
             end={{ x: 1, y: 0.8 }}
             style={{ flex: 1 }}
@@ -247,7 +396,7 @@ export function AuraVisualizer({
 
         <Animated.View
           className="absolute"
-          style={{ width: outerSize, height: outerSize, transform: [{ rotate: sweepRotate }] }}
+          style={[{ width: outerSize, height: outerSize }, sweepStyle]}
           pointerEvents="none"
         >
           <View
@@ -260,7 +409,7 @@ export function AuraVisualizer({
             }}
           >
             <LinearGradient
-              colors={['rgba(16,185,129,0)', 'rgba(52,211,153,0.95)', 'rgba(16,185,129,0)']}
+              colors={isActive ? tier.sweep : ['rgba(100,116,139,0)', 'rgba(148,163,184,0.75)', 'rgba(100,116,139,0)']}
               start={{ x: 0.5, y: 1 }}
               end={{ x: 0.5, y: 0 }}
               style={{ flex: 1 }}
@@ -268,28 +417,31 @@ export function AuraVisualizer({
           </View>
         </Animated.View>
 
-        <View
-          className="absolute overflow-hidden rounded-full border border-emerald-200/60"
-          style={{ width: coreSize, height: coreSize }}
+        <Animated.View
+          className="absolute overflow-hidden rounded-full border"
+          style={[
+            {
+              width: coreSize,
+              height: coreSize,
+              borderColor: tier.ringBorder,
+            },
+            coreStyle,
+          ]}
         >
           <LinearGradient
-            colors={
-              isActive
-                ? ['#6ee7b7', '#34d399', '#059669']
-                : ['#94a3b8', '#64748b', '#334155']
-            }
+            colors={isActive ? tier.core : ['#94a3b8', '#64748b', '#334155']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 }}
           >
-            <Text className="text-center text-xs font-black uppercase tracking-widest text-slate-950">
+            <Text className="text-center text-[11px] font-black uppercase tracking-widest text-slate-950">
               {isBusy ? 'Syncing' : isActive ? 'Radar On' : 'Radar Off'}
             </Text>
             <Text className="mt-1 text-center text-[11px] font-semibold text-slate-900/85">
-              {isBusy ? 'Please wait' : isActive ? 'Tap to pause' : 'Tap to scan'}
+              {isBusy ? 'Please wait' : `${Math.max(0, Math.floor(radianceScore))} radiance`}
             </Text>
           </LinearGradient>
-        </View>
+        </Animated.View>
       </View>
     </Pressable>
   );

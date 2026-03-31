@@ -3,8 +3,9 @@ import { localRepo } from '../db/repositories';
 import { newId, newUuid } from '../services/id';
 import { notifyEchoReceived } from '../services/notifications';
 import { triggerSyncNow } from '../services/sync/syncEngine';
+import { getBestEffortEncounterCoordinates } from '../services/location/encounterLocation';
 import { session } from '../state/session';
-import { Encounter } from '../types/domain';
+import { Encounter, MessagePinType } from '../types/domain';
 
 const SAMPLE_MESSAGES = [
   'I finally took a deep breath and chose peace over pressure.',
@@ -15,6 +16,8 @@ const SAMPLE_MESSAGES = [
   'You are allowed to restart your day at any moment.',
 ];
 
+const SAMPLE_PIN_TYPES: MessagePinType[] = ['classic', 'star', 'crystal'];
+
 function randomMessage() {
   const index = Math.floor(Math.random() * SAMPLE_MESSAGES.length);
   return SAMPLE_MESSAGES[index] ?? SAMPLE_MESSAGES[0];
@@ -24,6 +27,11 @@ function randomSignalStrength() {
   const min = -85;
   const max = -45;
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randomPinType() {
+  const index = Math.floor(Math.random() * SAMPLE_PIN_TYPES.length);
+  return SAMPLE_PIN_TYPES[index] ?? 'classic';
 }
 
 export function useSimulateIncomingEcho() {
@@ -40,6 +48,8 @@ export function useSimulateIncomingEcho() {
       const observedMessageDate = happenedAt.slice(0, 10);
       const simulatedProfileId = `sim-${Math.random().toString(36).slice(2, 10)}`;
       const body = input?.message?.trim().length ? input.message.trim() : randomMessage();
+      const pinType = randomPinType();
+      const encounterCoordinates = await getBestEffortEncounterCoordinates();
 
       const encounter: Encounter = {
         id: newUuid(),
@@ -47,8 +57,13 @@ export function useSimulateIncomingEcho() {
         observedProfileId: simulatedProfileId,
         observedMessageBody: body,
         observedMessageDate,
+        observedPinType: pinType,
+        observedRippleCount: 0,
+        originalSenderId: null,
         observedRadianceScore: Math.floor(Math.random() * 450) + 100,
         happenedAt,
+        encounterLatitude: encounterCoordinates?.latitude ?? null,
+        encounterLongitude: encounterCoordinates?.longitude ?? null,
         rssi: randomSignalStrength(),
         pendingSync: true,
         seen: false,

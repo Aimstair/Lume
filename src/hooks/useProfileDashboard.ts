@@ -11,6 +11,7 @@ export function useProfileDashboard() {
       id: session.profileId || 'pending',
       lumeId: session.lumeId || 'PENDING',
       displayName: 'You',
+      displayNameChangedAt: null,
       radianceScore: 0,
       createdAt: new Date().toISOString(),
     },

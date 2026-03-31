@@ -24,6 +24,7 @@ function applyOfflineIdentity() {
     id: localId,
     lumeId: localLumeId,
     displayName: 'Offline User',
+    displayNameChangedAt: null,
     radianceScore: 0,
     createdAt: new Date().toISOString(),
   });
@@ -34,6 +35,7 @@ async function ensureRemoteProfile(user: AuthUser) {
     throw new Error('Supabase client unavailable');
   }
 
+  const existingLocalProfile = localRepo.getProfile(user.id);
   const defaultLumeId = lumeIdForUser(user.id);
 
   const { data, error } = await supabase
@@ -62,7 +64,8 @@ async function ensureRemoteProfile(user: AuthUser) {
   localRepo.upsertProfile({
     id: user.id,
     lumeId: resolvedLumeId,
-    displayName: data?.display_name ?? 'You',
+    displayName: data?.display_name ?? existingLocalProfile.displayName ?? 'You',
+    displayNameChangedAt: existingLocalProfile.displayNameChangedAt ?? null,
     radianceScore: data?.radiance_score ?? 0,
     createdAt: data?.created_at ?? new Date().toISOString(),
   });

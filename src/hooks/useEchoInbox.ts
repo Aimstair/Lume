@@ -22,3 +22,13 @@ export function usePinnedEchoes() {
     refetchInterval: session.isReady ? 3_000 : false,
   });
 }
+
+export function useEncounterFeed() {
+  return useQuery<Encounter[]>({
+    queryKey: ['echoFeed', session.profileId],
+    queryFn: async () => localRepo.listEncountersForFeed(session.profileId),
+    enabled: session.isReady,
+    initialData: [],
+    refetchInterval: session.isReady ? 3_000 : false,
+  });
+}

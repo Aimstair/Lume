@@ -15,6 +15,9 @@
     },
     "ios": {
       "bundleIdentifier": "com.lumetemplate"
-    }
+    },
+    "plugins": [
+      "@rnmapbox/maps"
+    ]
   }
 }

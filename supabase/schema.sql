@@ -11,6 +11,13 @@ begin
   end if;
 end $$;
 
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'message_pin_type') then
+    create type public.message_pin_type as enum ('classic', 'star', 'crystal');
+  end if;
+end $$;
+
 -- ---- PROFILES ----
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -43,11 +50,17 @@ create table if not exists public.messages (
   profile_id uuid not null references public.profiles(id) on delete cascade,
   body varchar(280) not null,
   message_date date not null default (now() at time zone 'utc')::date,
+  pin_type public.message_pin_type not null default 'classic',
+  ripple_count integer not null default 0,
+  original_sender_id uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint messages_body_not_empty check (char_length(trim(body)) > 0),
+  constraint messages_ripple_count_non_negative check (ripple_count >= 0),
   constraint uq_messages_profile_per_day unique (profile_id, message_date)
 );
+
+create index if not exists idx_messages_original_sender_id on public.messages(original_sender_id);
 
 drop trigger if exists trg_messages_updated_at on public.messages;
 create trigger trg_messages_updated_at
@@ -125,6 +138,25 @@ begin
   return coalesce(new, old);
 end;
 $$;
+
+create or replace function public.increment_message_ripple_count(
+  target_profile_id uuid,
+  target_message_date date
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.messages
+  set ripple_count = ripple_count + 1
+  where profile_id = target_profile_id
+    and message_date = target_message_date;
+end;
+$$;
+
+grant execute on function public.increment_message_ripple_count(uuid, date) to authenticated;
 
 drop trigger if exists trg_message_reactions_radiance_ins on public.message_reactions;
 create trigger trg_message_reactions_radiance_ins

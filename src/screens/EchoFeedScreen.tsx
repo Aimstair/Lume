@@ -1,339 +1,461 @@
-import React, { Suspense } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Canvas } from '@react-three/fiber/native';
-import { OrbitControls } from '@react-three/drei/core/OrbitControls';
-import { useTexture } from '@react-three/drei/core/Texture';
-import { Inbox } from 'lucide-react-native';
+import React from 'react';
+import {
+  Alert,
+  Animated,
+  Modal,
+  PanResponder,
+  Pressable,
+  SectionList,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+import { Heart, Inbox } from 'lucide-react-native';
+import { useEncounterFeed } from '../hooks/useEchoInbox';
+import { useRippleMessage } from '../hooks/useDailyMessageMutations';
+import { useEchoInboxActions } from '../hooks/useEchoInboxActions';
+import { useHeartReaction } from '../hooks/useReactionMutations';
+import { MessagePinType } from '../types/domain';
 
 type EchoFeedScreenProps = {
   onOpenInbox?: () => void;
   unreadCount?: number;
 };
 
-type EchoMessage = {
+type EchoCard = {
   id: string;
+  encounterId: string;
   content: string;
   senderId: string;
-  auraColor: string;
+  happenedAt: string;
+  messageDate: string;
+  pinType: MessagePinType;
+  rippleCount: number;
+  originalSenderId: string | null;
 };
 
-const BOARD_WIDTH = 8.8;
-const BOARD_HEIGHT = 5.8;
-const NOTE_WIDTH = 1.28;
-const NOTE_HEIGHT = 1.05;
-
-const MOCK_MESSAGES: EchoMessage[] = [
-  {
-    id: 'echo-1',
-    content: 'Today I chose stillness over noise and it changed everything about my mood.',
-    senderId: 'LUME-H7N2',
-    auraColor: '#fde68a',
-  },
-  {
-    id: 'echo-2',
-    content: 'Sharing this for whoever needs it: progress can be quiet and still be real.',
-    senderId: 'LUME-C4L9',
-    auraColor: '#93c5fd',
-  },
-  {
-    id: 'echo-3',
-    content: 'I am rebuilding my energy one gentle decision at a time.',
-    senderId: 'LUME-X8M1',
-    auraColor: '#f9a8d4',
-  },
-  {
-    id: 'echo-4',
-    content: 'Pause, breathe, unclench your shoulders. This is your reminder.',
-    senderId: 'LUME-Q2P5',
-    auraColor: '#86efac',
-  },
-  {
-    id: 'echo-5',
-    content: 'There is something powerful about small acts of kindness done consistently.',
-    senderId: 'LUME-T5R7',
-    auraColor: '#fdba74',
-  },
-  {
-    id: 'echo-6',
-    content: 'You are not behind. You are unfolding in your own timing.',
-    senderId: 'LUME-B3K6',
-    auraColor: '#a5b4fc',
-  },
-];
-
-type PositionedNote = {
-  message: EchoMessage;
-  position: [number, number, number];
-  rotationZ: number;
+type EchoSection = {
+  key: string;
+  title: string;
+  data: EchoCard[];
 };
 
-type SceneErrorBoundaryProps = {
-  children: React.ReactNode;
-  fallback: React.ReactNode;
-};
+type SwipeAction = 'spark' | 'report' | 'carry';
 
-type SceneErrorBoundaryState = {
-  hasError: boolean;
-};
-
-class SceneErrorBoundary extends React.Component<SceneErrorBoundaryProps, SceneErrorBoundaryState> {
-  state: SceneErrorBoundaryState = {
-    hasError: false,
-  };
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
+function dayKeyFromIso(iso: string) {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'unknown';
   }
 
-  componentDidCatch() {
-    // Keep Echoes screen alive even if the 3D scene throws at runtime.
+  const year = parsed.getFullYear();
+  const month = `${parsed.getMonth() + 1}`.padStart(2, '0');
+  const day = `${parsed.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatSectionTitle(dayKey: string) {
+  if (dayKey === 'unknown') {
+    return 'Unknown date';
   }
 
-  render() {
-    if (this.state.hasError) {
-      return this.props.fallback;
-    }
-
-    return this.props.children;
-  }
-}
-
-function seededValue(seed: string) {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash << 5) - hash + seed.charCodeAt(i);
-    hash |= 0;
+  const parsed = new Date(`${dayKey}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return dayKey;
   }
 
-  const normalized = Math.sin(hash) * 10000;
-  return normalized - Math.floor(normalized);
+  return parsed.toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }
 
-function BulletinBoard() {
-  const corkTexture = useTexture('https://images.unsplash.com/photo-1586075010923-2dd4570fb338?w=1024');
+function formatTimestamp(iso: string) {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'Unknown time';
+  }
 
-  React.useMemo(() => {
-    corkTexture.wrapS = 1000;
-    corkTexture.wrapT = 1000;
-    corkTexture.repeat.set(2.8, 2);
-    corkTexture.anisotropy = 8;
-  }, [corkTexture]);
-
-  return (
-    <mesh position={[0, 0, 0]}>
-      <planeGeometry args={[BOARD_WIDTH, BOARD_HEIGHT]} />
-      <meshStandardMaterial map={corkTexture} roughness={0.98} metalness={0.04} />
-    </mesh>
-  );
-}
-
-type PinnedNoteProps = {
-  note: PositionedNote;
-  onSelectMessage: (message: EchoMessage) => void;
-};
-
-function PinnedNote({ note, onSelectMessage }: PinnedNoteProps) {
-  return (
-    <group position={note.position} rotation={[0, 0, note.rotationZ]}>
-      <mesh position={[0.03, -0.04, -0.02]}>
-        <planeGeometry args={[NOTE_WIDTH, NOTE_HEIGHT]} />
-        <meshStandardMaterial color="#020617" transparent opacity={0.28} roughness={1} />
-      </mesh>
-
-      <mesh
-        onPointerDown={(event) => {
-          event.stopPropagation();
-          onSelectMessage(note.message);
-        }}
-      >
-        <planeGeometry args={[NOTE_WIDTH, NOTE_HEIGHT, 12, 12]} />
-        <meshStandardMaterial color={note.message.auraColor} roughness={0.9} metalness={0.02} />
-      </mesh>
-
-      <mesh position={[0, NOTE_HEIGHT * 0.45, 0.01]}>
-        <cylinderGeometry args={[0.045, 0.045, 0.03, 24]} />
-        <meshStandardMaterial color="#f8fafc" roughness={0.2} metalness={0.2} />
-      </mesh>
-    </group>
-  );
-}
-
-type BoardSceneProps = {
-  notes: PositionedNote[];
-  onSelectMessage: (message: EchoMessage) => void;
-};
-
-function BoardScene({ notes, onSelectMessage }: BoardSceneProps) {
-  return (
-    <>
-      <ambientLight intensity={0.78} />
-
-      <spotLight
-        position={[1.8, 2.7, 5.2]}
-        intensity={1.25}
-        angle={0.5}
-        penumbra={0.6}
-        distance={16}
-        decay={1.2}
-      />
-
-      <pointLight position={[-2.4, -2.2, 4.5]} intensity={0.28} />
-
-      <group position={[0, 0, -0.4]}>
-        <BulletinBoard />
-
-        {notes.map((note) => (
-          <PinnedNote key={note.message.id} note={note} onSelectMessage={onSelectMessage} />
-        ))}
-      </group>
-
-      <OrbitControls
-        makeDefault
-        enablePan
-        enableRotate
-        enableZoom
-        target={[0, 0, -0.4]}
-        minDistance={5.4}
-        maxDistance={7.5}
-        minPolarAngle={Math.PI / 2.2}
-        maxPolarAngle={Math.PI / 1.7}
-        minAzimuthAngle={-0.45}
-        maxAzimuthAngle={0.45}
-        rotateSpeed={0.55}
-        zoomSpeed={0.65}
-        panSpeed={0.6}
-      />
-    </>
-  );
-}
-
-function BoardFallback() {
-  return (
-    <View className="flex-1 items-center justify-center bg-slate-950">
-      <ActivityIndicator size="large" color="#34d399" />
-      <Text className="mt-3 text-slate-300">Loading bulletin board...</Text>
-    </View>
-  );
+  return parsed.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 export function EchoFeedScreen({ onOpenInbox, unreadCount = 0 }: EchoFeedScreenProps) {
-  const [selectedMessage, setSelectedMessage] = React.useState<EchoMessage | null>(null);
+  const { width, height } = useWindowDimensions();
+  const encounters = useEncounterFeed();
+  const rippleMessage = useRippleMessage();
+  const heartReaction = useHeartReaction();
+  const { reportEcho } = useEchoInboxActions();
 
-  const positionedNotes = React.useMemo(() => {
-    const halfWidth = BOARD_WIDTH / 2 - NOTE_WIDTH / 2 - 0.3;
-    const halfHeight = BOARD_HEIGHT / 2 - NOTE_HEIGHT / 2 - 0.3;
+  const [selectedMessage, setSelectedMessage] = React.useState<EchoCard | null>(null);
+  const [sparkedEncounterIds, setSparkedEncounterIds] = React.useState<Set<string>>(new Set());
+  const [isCardActionBusy, setIsCardActionBusy] = React.useState(false);
 
-    return MOCK_MESSAGES.map((message) => {
-      const randomX = seededValue(`${message.id}-x`);
-      const randomY = seededValue(`${message.id}-y`);
-      const randomR = seededValue(`${message.id}-r`);
+  const pan = React.useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
 
-      const x = -halfWidth + randomX * (halfWidth * 2);
-      const y = -halfHeight + randomY * (halfHeight * 2);
-      const z = 0.05;
-      const rotationZ = (randomR - 0.5) * 0.42;
+  const cardRotate = pan.x.interpolate({
+    inputRange: [-180, 0, 180],
+    outputRange: ['-10deg', '0deg', '10deg'],
+    extrapolate: 'clamp',
+  });
 
-      return {
-        message,
-        position: [x, y, z] as [number, number, number],
-        rotationZ,
-      };
-    });
-  }, []);
+  const sparkHintOpacity = pan.x.interpolate({
+    inputRange: [40, 140],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  const reportHintOpacity = pan.x.interpolate({
+    inputRange: [-140, -40],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
+  const carryHintOpacity = pan.y.interpolate({
+    inputRange: [-140, -40],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
+  const cards = React.useMemo<EchoCard[]>(() => {
+    return (encounters.data ?? []).map((encounter) => ({
+      id: encounter.id,
+      encounterId: encounter.id,
+      content: encounter.observedMessageBody,
+      senderId: encounter.observedProfileId,
+      happenedAt: encounter.happenedAt,
+      messageDate: encounter.observedMessageDate,
+      pinType: encounter.observedPinType,
+      rippleCount: encounter.observedRippleCount,
+      originalSenderId: encounter.originalSenderId,
+    }));
+  }, [encounters.data]);
+
+  const sections = React.useMemo<EchoSection[]>(() => {
+    const grouped = new Map<string, EchoCard[]>();
+
+    for (const card of cards) {
+      const dayKey = dayKeyFromIso(card.happenedAt);
+      const existing = grouped.get(dayKey) ?? [];
+      existing.push(card);
+      grouped.set(dayKey, existing);
+    }
+
+    return Array.from(grouped.entries())
+      .sort((left, right) => right[0].localeCompare(left[0]))
+      .map(([key, data]) => ({
+        key,
+        title: formatSectionTitle(key),
+        data,
+      }));
+  }, [cards]);
 
   const closeReader = React.useCallback(() => {
-    setSelectedMessage(null);
-  }, []);
+    if (isCardActionBusy) {
+      return;
+    }
 
-  const sparkMessage = React.useCallback(() => {
-    if (!selectedMessage) return;
-
-    Alert.alert('Spark sent', `You sparked ${selectedMessage.senderId}.`);
     setSelectedMessage(null);
-  }, [selectedMessage]);
+  }, [isCardActionBusy]);
+
+  React.useEffect(() => {
+    if (!selectedMessage) {
+      pan.setValue({ x: 0, y: 0 });
+      setIsCardActionBusy(false);
+    }
+  }, [pan, selectedMessage]);
+
+  const resetCardPosition = React.useCallback(() => {
+    Animated.spring(pan, {
+      toValue: { x: 0, y: 0 },
+      useNativeDriver: true,
+      friction: 7,
+      tension: 80,
+    }).start();
+  }, [pan]);
+
+  const animateCardOut = React.useCallback(
+    (toValue: { x: number; y: number }) => {
+      return new Promise<void>((resolve) => {
+        Animated.timing(pan, {
+          toValue,
+          duration: 220,
+          useNativeDriver: true,
+        }).start(() => resolve());
+      });
+    },
+    [pan],
+  );
+
+  const performSwipeAction = React.useCallback(
+    async (action: SwipeAction) => {
+      if (!selectedMessage || isCardActionBusy) {
+        return;
+      }
+
+      setIsCardActionBusy(true);
+
+      try {
+        if (action === 'spark') {
+          await animateCardOut({ x: width * 0.95, y: 0 });
+
+          if (!sparkedEncounterIds.has(selectedMessage.encounterId)) {
+            await heartReaction.mutateAsync({
+              encounterId: selectedMessage.encounterId,
+              observedProfileId: selectedMessage.senderId,
+              messageDate: selectedMessage.messageDate,
+            });
+
+            setSparkedEncounterIds((previous) => {
+              const next = new Set(previous);
+              next.add(selectedMessage.encounterId);
+              return next;
+            });
+          }
+
+          setSelectedMessage(null);
+          return;
+        }
+
+        if (action === 'report') {
+          await animateCardOut({ x: -width * 0.95, y: 0 });
+          await reportEcho(selectedMessage.encounterId);
+          setSelectedMessage(null);
+          return;
+        }
+
+        await animateCardOut({ x: 0, y: -height * 0.7 });
+        await rippleMessage.mutateAsync({
+          encounterId: selectedMessage.encounterId,
+          body: selectedMessage.content,
+          sourceProfileId: selectedMessage.senderId,
+          sourceMessageDate: selectedMessage.messageDate,
+          sourceOriginalSenderId: selectedMessage.originalSenderId,
+          pinType: selectedMessage.pinType,
+        });
+        setSelectedMessage(null);
+      } catch (error: any) {
+        resetCardPosition();
+        Alert.alert('Action failed', error?.message || 'Please try again.');
+      } finally {
+        setIsCardActionBusy(false);
+      }
+    },
+    [
+      animateCardOut,
+      heartReaction,
+      height,
+      isCardActionBusy,
+      reportEcho,
+      resetCardPosition,
+      rippleMessage,
+      selectedMessage,
+      sparkedEncounterIds,
+      width,
+    ],
+  );
+
+  const panResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_evt, gestureState) => {
+          if (isCardActionBusy) {
+            return false;
+          }
+
+          return Math.abs(gestureState.dx) > 8 || Math.abs(gestureState.dy) > 8;
+        },
+        onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
+          useNativeDriver: false,
+        }),
+        onPanResponderRelease: (_evt, gestureState) => {
+          if (isCardActionBusy) {
+            return;
+          }
+
+          const absX = Math.abs(gestureState.dx);
+          const absY = Math.abs(gestureState.dy);
+
+          if (gestureState.dx > 120 && absX > absY) {
+            void performSwipeAction('spark');
+            return;
+          }
+
+          if (gestureState.dx < -120 && absX > absY) {
+            void performSwipeAction('report');
+            return;
+          }
+
+          if (gestureState.dy < -120 && absY > absX) {
+            void performSwipeAction('carry');
+            return;
+          }
+
+          resetCardPosition();
+        },
+        onPanResponderTerminate: () => {
+          if (!isCardActionBusy) {
+            resetCardPosition();
+          }
+        },
+      }),
+    [isCardActionBusy, pan.x, pan.y, performSwipeAction, resetCardPosition],
+  );
 
   return (
-    <View className="flex-1 bg-slate-950">
-      <SceneErrorBoundary fallback={<BoardFallback />}>
-        <Suspense fallback={<BoardFallback />}>
-          <Canvas
-            style={styles.canvas}
-            camera={{
-              position: [0, 0, 6.3],
-              fov: 46,
-              near: 0.1,
-              far: 100,
-            }}
-          >
-            <BoardScene notes={positionedNotes} onSelectMessage={setSelectedMessage} />
-          </Canvas>
-        </Suspense>
-      </SceneErrorBoundary>
-
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        <View className="px-4 pt-10">
-          <View className="flex-row items-start justify-between">
-            <View className="max-w-[72%]">
-              <Text className="text-3xl font-black text-white">Echoes Board</Text>
-              <Text className="mt-1 text-slate-300">Move around the board and tap a note to read the full echo.</Text>
-            </View>
-
-            {unreadCount > 0 ? (
-              <Pressable
-                onPress={onOpenInbox}
-                className="rounded-full border border-emerald-300/30 bg-slate-900/90 px-3 py-1.5"
-                style={({ pressed }) => ({ opacity: pressed ? 0.82 : 1 })}
-              >
-                <View className="flex-row items-center">
-                  <Inbox size={13} color="#a7f3d0" />
-                  <Text className="ml-1 text-xs font-semibold text-emerald-100">{unreadCount}</Text>
-                </View>
-              </Pressable>
-            ) : null}
+    <View className="flex-1 bg-emerald-50 dark:bg-slate-950">
+      <SectionList
+        sections={sections}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={{ paddingHorizontal: 24, paddingTop: 32, paddingBottom: 34 }}
+        stickySectionHeadersEnabled={false}
+        renderSectionHeader={({ section }) => (
+          <View className="mb-2 mt-6">
+            <Text className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-300">
+              {section.title}
+            </Text>
           </View>
-        </View>
+        )}
+        renderItem={({ item }) => {
+          const isSparked = sparkedEncounterIds.has(item.encounterId);
 
-        <View pointerEvents="none" className="absolute bottom-5 left-4 right-4 rounded-2xl border border-slate-800 bg-slate-900/90 px-4 py-3">
-          <Text className="text-xs text-slate-300">Drag to orbit, pinch to zoom slightly, and tap a note to open it.</Text>
-        </View>
-      </View>
+          return (
+            <Pressable
+              onPress={() => setSelectedMessage(item)}
+              style={({ pressed }) => ({ opacity: pressed ? 0.84 : 1 })}
+              className="mb-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:shadow-none"
+            >
+              <View className="flex-row items-center justify-between">
+                <View className="flex-row items-center">
+                  <Text className="text-xs font-semibold uppercase tracking-widest text-emerald-500 dark:text-emerald-300">
+                    {item.pinType} pin
+                  </Text>
+
+                  {isSparked ? (
+                    <View className="ml-2 flex-row items-center rounded-full border border-emerald-300/40 bg-emerald-400/15 px-2 py-0.5">
+                      <Heart size={10} color="#34d399" fill="#34d399" />
+                      <Text className="ml-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-300">
+                        Sparked
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <Text className="text-xs text-slate-500 dark:text-slate-300">{formatTimestamp(item.happenedAt)}</Text>
+              </View>
+
+              <Text className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-50">From {item.senderId}</Text>
+              <Text className="mt-2 text-base leading-6 text-slate-800 dark:text-slate-100" numberOfLines={4}>
+                {item.content}
+              </Text>
+
+              <Text className="mt-3 text-xs text-slate-500 dark:text-slate-300">Ripples {item.rippleCount}</Text>
+            </Pressable>
+          );
+        }}
+        ListHeaderComponent={
+          <View>
+            <View className="flex-row items-start justify-between">
+              <View className="max-w-[78%]">
+                <Text className="text-3xl font-black text-slate-900 dark:text-slate-50">Echoes</Text>
+                <Text className="mt-1 text-slate-700 dark:text-slate-200">
+                  Open a card, then swipe right to spark, left to report, and up to carry.
+                </Text>
+              </View>
+
+              {unreadCount > 0 ? (
+                <Pressable
+                  onPress={onOpenInbox}
+                  className="rounded-full border border-emerald-300/40 bg-white px-3 py-1.5 dark:bg-slate-900"
+                  style={({ pressed }) => ({ opacity: pressed ? 0.82 : 1 })}
+                >
+                  <View className="flex-row items-center">
+                    <Inbox size={13} color="#10b981" />
+                    <Text className="ml-1 text-xs font-semibold text-emerald-600 dark:text-emerald-300">{unreadCount}</Text>
+                  </View>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        }
+        ListEmptyComponent={
+          <View className="mt-10 rounded-3xl border border-dashed border-slate-300 bg-white px-6 py-8 dark:border-slate-700 dark:bg-slate-900">
+            <Text className="text-center text-lg font-bold text-slate-900 dark:text-slate-50">No echoes yet</Text>
+            <Text className="mt-2 text-center text-slate-700 dark:text-slate-200">
+              Keep Radar on and move around to receive your first nearby message.
+            </Text>
+          </View>
+        }
+      />
 
       <Modal visible={Boolean(selectedMessage)} transparent animationType="fade" onRequestClose={closeReader}>
-        <View className="flex-1 items-center justify-center bg-black/80 px-6">
-          <View className="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900 p-5">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-sm font-semibold uppercase tracking-widest text-slate-400">Echo Reader</Text>
-              <Text className="text-xs font-semibold text-slate-500">{selectedMessage?.senderId}</Text>
-            </View>
-
-            <Text className="mt-4 text-lg leading-8 text-slate-200">{selectedMessage?.content}</Text>
-
-            <View className="mt-6 flex-row">
-              <Pressable
-                className="mr-2 flex-1 rounded-xl bg-slate-800 py-3"
-                onPress={closeReader}
-                style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+        <Pressable className="flex-1 items-center justify-center bg-black/80 px-6" onPress={closeReader}>
+          <Pressable onPress={() => {}}>
+            <Animated.View
+              {...panResponder.panHandlers}
+              className="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900 p-5"
+              style={{
+                transform: [
+                  { translateX: pan.x },
+                  { translateY: pan.y },
+                  { rotate: cardRotate },
+                ],
+              }}
+            >
+              <Animated.View
+                className="absolute right-4 top-4 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-3 py-1"
+                style={{ opacity: sparkHintOpacity }}
+                pointerEvents="none"
               >
-                <Text className="text-center font-semibold text-slate-200">Close</Text>
-              </Pressable>
+                <Text className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Spark</Text>
+              </Animated.View>
 
-              <Pressable
-                className="ml-2 flex-1 rounded-xl bg-emerald-400 py-3"
-                onPress={sparkMessage}
-                style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+              <Animated.View
+                className="absolute left-4 top-4 rounded-full border border-rose-300/40 bg-rose-400/15 px-3 py-1"
+                style={{ opacity: reportHintOpacity }}
+                pointerEvents="none"
               >
-                <Text className="text-center font-bold text-slate-950">Spark ✦</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
+                <Text className="text-xs font-semibold uppercase tracking-wider text-rose-300">Report</Text>
+              </Animated.View>
+
+              <Animated.View
+                className="absolute self-center rounded-full border border-blue-300/40 bg-blue-500/15 px-3 py-1"
+                style={{
+                  top: 10,
+                  opacity: carryHintOpacity,
+                }}
+                pointerEvents="none"
+              >
+                <Text className="text-xs font-semibold uppercase tracking-wider text-blue-300">Carry</Text>
+              </Animated.View>
+
+              <View className="flex-row items-center justify-between">
+                <Text className="text-sm font-semibold uppercase tracking-widest text-slate-400">Echo Reader</Text>
+                <Text className="text-xs font-semibold text-slate-500">{selectedMessage?.senderId}</Text>
+              </View>
+
+              <Text className="mt-4 text-lg leading-8 text-slate-200">{selectedMessage?.content}</Text>
+
+              <Text className="mt-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Ripples {selectedMessage?.rippleCount ?? 0}
+              </Text>
+
+              {selectedMessage && sparkedEncounterIds.has(selectedMessage.encounterId) ? (
+                <View className="mt-3 self-start rounded-full border border-emerald-300/40 bg-emerald-400/15 px-3 py-1">
+                  <Text className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Already Sparked</Text>
+                </View>
+              ) : null}
+
+              <Text className="mt-6 text-xs text-slate-400">
+                Swipe right to spark, left to report, up to carry. Tap outside to close.
+              </Text>
+            </Animated.View>
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  canvas: {
-    ...StyleSheet.absoluteFillObject,
-  },
-});

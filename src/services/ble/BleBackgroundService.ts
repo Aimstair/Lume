@@ -13,6 +13,7 @@ import {
 } from './constants';
 import { session } from '../../state/session';
 import { notifyEchoReceived } from '../../services/notifications';
+import { getBestEffortEncounterCoordinates } from '../location/encounterLocation';
 
 const BleManagerModule = NativeModules.BleManager;
 const bleEmitter = new NativeEventEmitter(BleManagerModule);
@@ -20,19 +21,30 @@ const bleEmitter = new NativeEventEmitter(BleManagerModule);
 let subscriptions: Array<{ remove: () => void }> = [];
 let started = false;
 let starting = false;
+let stopping = false;
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function getBleBackgroundLoopStatus(): Promise<boolean> {
+  if (starting) {
+    return true;
+  }
+
+  if (stopping) {
+    return false;
+  }
+
   try {
     const advertiserActive = await BleAdvertiser.isActive();
     const scanActive = await BleManager.isScanning().catch(() => false);
-    started = advertiserActive || scanActive;
-    return started;
+    const nativeActive = advertiserActive || scanActive;
+
+    started = nativeActive;
+    return nativeActive;
   } catch {
-    return started;
+    return started || starting;
   }
 }
 
@@ -53,7 +65,10 @@ async function getLocalBroadcastPayload() {
     profileId: session.profileId,
     radianceScore: profile.radianceScore,
     dailyMessage: todayMessage?.body ?? '',
-    messageDate: new Date().toISOString().slice(0, 10),
+    messageDate: todayMessage?.messageDate ?? new Date().toISOString().slice(0, 10),
+    pinType: todayMessage?.pinType ?? 'classic',
+    rippleCount: todayMessage?.rippleCount ?? 0,
+    originalSenderId: todayMessage?.originalSenderId ?? null,
   };
 }
 
@@ -82,6 +97,18 @@ async function startPeripheralAdvertising() {
   );
 }
 
+export async function refreshBleBroadcastPayload() {
+  if ((!started && !starting) || stopping) {
+    return;
+  }
+
+  try {
+    await startPeripheralAdvertising();
+  } catch {
+    // Keep app stable if the broadcast refresh races with BLE transitions.
+  }
+}
+
 async function exchangePayloadWithDiscoveredDevice(peripheralId: string, rssi: number | null) {
   try {
     await BleManager.connect(peripheralId);
@@ -108,6 +135,7 @@ async function exchangePayloadWithDiscoveredDevice(peripheralId: string, rssi: n
       return;
     }
 
+    const encounterCoordinates = await getBestEffortEncounterCoordinates();
     const encounterId = newUuid();
     localRepo.addEncounter({
       id: encounterId,
@@ -115,8 +143,13 @@ async function exchangePayloadWithDiscoveredDevice(peripheralId: string, rssi: n
       observedProfileId: payload.profileId,
       observedMessageBody: payload.dailyMessage,
       observedMessageDate: payload.messageDate,
+      observedPinType: payload.pinType,
+      observedRippleCount: payload.rippleCount,
+      originalSenderId: payload.originalSenderId,
       observedRadianceScore: payload.radianceScore,
       happenedAt: new Date().toISOString(),
+      encounterLatitude: encounterCoordinates?.latitude ?? null,
+      encounterLongitude: encounterCoordinates?.longitude ?? null,
       rssi,
       pendingSync: true,
       seen: false,
@@ -180,7 +213,7 @@ function addBleListeners() {
 
   subscriptions.push(
     bleEmitter.addListener('BleManagerStopScan', () => {
-      if (!started || starting) {
+      if (!started || starting || stopping) {
         return;
       }
 
@@ -192,18 +225,47 @@ function addBleListeners() {
 }
 
 export async function startBleBackgroundLoop() {
+  if (stopping) {
+    await wait(250);
+  }
+
   if (started || starting) return;
   starting = true;
+  stopping = false;
 
   try {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
+        if (stopping) {
+          throw new Error('Radar is stopping');
+        }
+
         await BleManager.start({ showAlert: false });
+
+        if (stopping) {
+          throw new Error('Radar is stopping');
+        }
+
+        for (const sub of subscriptions) {
+          sub.remove();
+        }
+        subscriptions = [];
+
         addBleListeners();
         await startPeripheralAdvertising();
+
+        if (stopping) {
+          throw new Error('Radar is stopping');
+        }
+
         await startCentralScanning();
+
+        if (stopping) {
+          throw new Error('Radar is stopping');
+        }
+
         started = true;
         return;
       } catch (error) {
@@ -240,7 +302,9 @@ export async function startBleBackgroundLoop() {
 }
 
 export async function stopBleBackgroundLoop() {
+  stopping = true;
   starting = false;
+  started = false;
 
   for (const sub of subscriptions) {
     sub.remove();
@@ -259,5 +323,5 @@ export async function stopBleBackgroundLoop() {
     // no-op
   }
 
-  started = false;
+  stopping = false;
 }

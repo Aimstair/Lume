@@ -1,10 +1,16 @@
-import { DailyMessage, Encounter, Profile } from '../types/domain';
+import { DailyMessage, Encounter, MessagePinType, Profile } from '../types/domain';
 import { inSql } from './localDb';
 
 type OutboxItem = {
   id: string;
-  opType: 'upsert_daily_message' | 'insert_encounter' | 'heart_reaction' | 'heart_reaction_by_target';
-  tableName: 'messages' | 'encounters' | 'message_reactions';
+  opType:
+    | 'upsert_daily_message'
+    | 'insert_encounter'
+    | 'heart_reaction'
+    | 'heart_reaction_by_target'
+    | 'increment_message_ripple'
+    | 'update_profile_display_name';
+  tableName: 'messages' | 'encounters' | 'message_reactions' | 'profiles';
   payloadJson: string;
   createdAt: string;
 };
@@ -17,6 +23,42 @@ function toFlag(value: boolean) {
   return value ? 1 : 0;
 }
 
+function toNullableNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function mapEncounterRow(row: any): Encounter {
+  return {
+    id: row.id,
+    observerProfileId: row.observer_profile_id,
+    observedProfileId: row.observed_profile_id,
+    observedMessageBody: row.observed_message_body,
+    observedMessageDate: row.observed_message_date,
+    observedPinType: (row.observed_pin_type ?? 'classic') as MessagePinType,
+    observedRippleCount: Number(row.observed_ripple_count ?? 0),
+    originalSenderId: row.original_sender_id ?? null,
+    observedRadianceScore: row.observed_radiance_score,
+    happenedAt: row.happened_at,
+    encounterLatitude: toNullableNumber(row.encounter_latitude),
+    encounterLongitude: toNullableNumber(row.encounter_longitude),
+    rssi: row.rssi,
+    pendingSync: row.pending_sync === 1,
+    seen: row.is_seen === 1,
+    pinned: row.is_pinned === 1,
+    reported: row.is_reported === 1,
+    deleted: row.is_deleted === 1,
+  };
+}
+
 export const localRepo = {
   getProfile(profileId: string): Profile {
     return inSql((db) => {
@@ -27,6 +69,7 @@ export const localRepo = {
         id: row?.id ?? profileId,
         lumeId: row?.lume_id ?? '',
         displayName: row?.display_name ?? null,
+        displayNameChangedAt: row?.display_name_changed_at ?? null,
         radianceScore: row?.radiance_score ?? 0,
         createdAt: row?.updated_at ?? nowIso(),
       };
@@ -37,16 +80,39 @@ export const localRepo = {
     inSql((db) => {
       db.execute(
         `
-        INSERT INTO local_profiles (id, lume_id, display_name, radiance_score, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO local_profiles (id, lume_id, display_name, display_name_changed_at, radiance_score, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(id)
         DO UPDATE SET
           lume_id = excluded.lume_id,
           display_name = excluded.display_name,
+          display_name_changed_at = excluded.display_name_changed_at,
           radiance_score = excluded.radiance_score,
           updated_at = excluded.updated_at;
         `,
-        [profile.id, profile.lumeId, profile.displayName, profile.radianceScore, nowIso()],
+        [
+          profile.id,
+          profile.lumeId,
+          profile.displayName,
+          profile.displayNameChangedAt,
+          profile.radianceScore,
+          nowIso(),
+        ],
+      );
+    });
+  },
+
+  updateProfileDisplayName(profileId: string, displayName: string, changedAt: string) {
+    inSql((db) => {
+      db.execute(
+        `
+        UPDATE local_profiles
+        SET display_name = ?,
+            display_name_changed_at = ?,
+            updated_at = ?
+        WHERE id = ?;
+        `,
+        [displayName, changedAt, nowIso(), profileId],
       );
     });
   },
@@ -66,6 +132,9 @@ export const localRepo = {
         profileId: row.profile_id,
         body: row.body,
         messageDate: row.message_date,
+        pinType: (row.pin_type ?? 'classic') as MessagePinType,
+        rippleCount: Number(row.ripple_count ?? 0),
+        originalSenderId: row.original_sender_id ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         pendingSync: row.pending_sync === 1,
@@ -92,6 +161,9 @@ export const localRepo = {
         profileId: row.profile_id,
         body: row.body,
         messageDate: row.message_date,
+        pinType: (row.pin_type ?? 'classic') as MessagePinType,
+        rippleCount: Number(row.ripple_count ?? 0),
+        originalSenderId: row.original_sender_id ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         pendingSync: row.pending_sync === 1,
@@ -104,17 +176,34 @@ export const localRepo = {
     profileId: string;
     body: string;
     messageDate: string;
+    pinType?: MessagePinType;
+    rippleCount?: number;
+    originalSenderId?: string | null;
     pendingSync: boolean;
   }) {
     inSql((db) => {
       const ts = nowIso();
       db.execute(
         `
-        INSERT INTO local_messages (id, profile_id, body, message_date, created_at, updated_at, pending_sync)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO local_messages (
+          id,
+          profile_id,
+          body,
+          message_date,
+          pin_type,
+          ripple_count,
+          original_sender_id,
+          created_at,
+          updated_at,
+          pending_sync
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(profile_id, message_date)
         DO UPDATE SET
           body = excluded.body,
+          pin_type = excluded.pin_type,
+          ripple_count = excluded.ripple_count,
+          original_sender_id = excluded.original_sender_id,
           updated_at = excluded.updated_at,
           pending_sync = excluded.pending_sync;
         `,
@@ -123,6 +212,9 @@ export const localRepo = {
           input.profileId,
           input.body,
           input.messageDate,
+          input.pinType ?? 'classic',
+          Math.max(0, Math.floor(input.rippleCount ?? 0)),
+          input.originalSenderId ?? null,
           ts,
           ts,
           toFlag(input.pendingSync),
@@ -150,15 +242,20 @@ export const localRepo = {
           observed_profile_id,
           observed_message_body,
           observed_message_date,
+          observed_pin_type,
+          observed_ripple_count,
+          original_sender_id,
           observed_radiance_score,
           happened_at,
+          encounter_latitude,
+          encounter_longitude,
           rssi,
           pending_sync,
           is_seen,
           is_pinned,
           is_reported,
           is_deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         `,
         [
           encounter.id,
@@ -166,8 +263,13 @@ export const localRepo = {
           encounter.observedProfileId,
           encounter.observedMessageBody,
           encounter.observedMessageDate,
+          encounter.observedPinType,
+          Math.max(0, Math.floor(encounter.observedRippleCount)),
+          encounter.originalSenderId,
           encounter.observedRadianceScore,
           encounter.happenedAt,
+          encounter.encounterLatitude,
+          encounter.encounterLongitude,
           encounter.rssi,
           toFlag(encounter.pendingSync),
           toFlag(encounter.seen),
@@ -194,21 +296,7 @@ export const localRepo = {
         [observerProfileId],
       );
       const rows = result.rows?._array ?? [];
-      return rows.map((row: any) => ({
-        id: row.id,
-        observerProfileId: row.observer_profile_id,
-        observedProfileId: row.observed_profile_id,
-        observedMessageBody: row.observed_message_body,
-        observedMessageDate: row.observed_message_date,
-        observedRadianceScore: row.observed_radiance_score,
-        happenedAt: row.happened_at,
-        rssi: row.rssi,
-        pendingSync: row.pending_sync === 1,
-        seen: row.is_seen === 1,
-        pinned: row.is_pinned === 1,
-        reported: row.is_reported === 1,
-        deleted: row.is_deleted === 1,
-      }));
+      return rows.map(mapEncounterRow);
     });
   },
 
@@ -229,21 +317,7 @@ export const localRepo = {
       );
 
       const rows = result.rows?._array ?? [];
-      return rows.map((row: any) => ({
-        id: row.id,
-        observerProfileId: row.observer_profile_id,
-        observedProfileId: row.observed_profile_id,
-        observedMessageBody: row.observed_message_body,
-        observedMessageDate: row.observed_message_date,
-        observedRadianceScore: row.observed_radiance_score,
-        happenedAt: row.happened_at,
-        rssi: row.rssi,
-        pendingSync: row.pending_sync === 1,
-        seen: row.is_seen === 1,
-        pinned: row.is_pinned === 1,
-        reported: row.is_reported === 1,
-        deleted: row.is_deleted === 1,
-      }));
+      return rows.map(mapEncounterRow);
     });
   },
 
@@ -264,21 +338,7 @@ export const localRepo = {
       );
 
       const rows = result.rows?._array ?? [];
-      return rows.map((row: any) => ({
-        id: row.id,
-        observerProfileId: row.observer_profile_id,
-        observedProfileId: row.observed_profile_id,
-        observedMessageBody: row.observed_message_body,
-        observedMessageDate: row.observed_message_date,
-        observedRadianceScore: row.observed_radiance_score,
-        happenedAt: row.happened_at,
-        rssi: row.rssi,
-        pendingSync: row.pending_sync === 1,
-        seen: row.is_seen === 1,
-        pinned: row.is_pinned === 1,
-        reported: row.is_reported === 1,
-        deleted: row.is_deleted === 1,
-      }));
+      return rows.map(mapEncounterRow);
     });
   },
 
@@ -328,6 +388,15 @@ export const localRepo = {
     inSql((db) => {
       db.execute(
         'UPDATE local_encounters SET is_seen = 1, is_pinned = 1, is_reported = 0, is_deleted = 0 WHERE id = ?;',
+        [encounterId],
+      );
+    });
+  },
+
+  incrementEncounterRippleCount(encounterId: string) {
+    inSql((db) => {
+      db.execute(
+        'UPDATE local_encounters SET observed_ripple_count = observed_ripple_count + 1 WHERE id = ?;',
         [encounterId],
       );
     });

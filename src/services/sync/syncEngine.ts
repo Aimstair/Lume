@@ -72,6 +72,24 @@ async function pushOutboxOnce() {
           if (error) throw error;
         }
 
+        if (item.opType === 'increment_message_ripple') {
+          const { error } = await supabase.rpc('increment_message_ripple_count', {
+            target_profile_id: payload.profile_id,
+            target_message_date: payload.message_date,
+          });
+          if (error) throw error;
+        }
+
+        if (item.opType === 'update_profile_display_name') {
+          const { error } = await supabase
+            .from('profiles')
+            .update({
+              display_name: payload.display_name,
+            })
+            .eq('id', payload.id);
+          if (error) throw error;
+        }
+
         localRepo.removeOutbox(item.id);
       } catch (error: any) {
         localRepo.markOutboxError(item.id, error?.message ?? 'unknown sync error');
