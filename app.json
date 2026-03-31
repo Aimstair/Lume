@@ -4,6 +4,7 @@
     "slug": "lume",
     "scheme": "lume",
     "version": "0.1.0",
+    "userInterfaceStyle": "automatic",
     "orientation": "portrait",
     "platforms": [
       "android",
@@ -14,6 +15,9 @@
     },
     "ios": {
       "bundleIdentifier": "com.lumetemplate"
-    }
+    },
+    "plugins": [
+      "@rnmapbox/maps"
+    ]
   }
 }

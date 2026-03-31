@@ -11,16 +11,27 @@ begin
   end if;
 end $$;
 
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'message_pin_type') then
+    create type public.message_pin_type as enum ('classic', 'star', 'crystal');
+  end if;
+end $$;
+
 -- ---- PROFILES ----
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   lume_id text not null unique,
   display_name text,
+  display_name_changed_at timestamptz,
   avatar_url text,
   radiance_score integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.profiles
+  add column if not exists display_name_changed_at timestamptz;
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -43,11 +54,25 @@ create table if not exists public.messages (
   profile_id uuid not null references public.profiles(id) on delete cascade,
   body varchar(280) not null,
   message_date date not null default (now() at time zone 'utc')::date,
+  pin_type public.message_pin_type not null default 'classic',
+  ripple_count integer not null default 0,
+  original_sender_id uuid references public.profiles(id) on delete set null,
+  aura_color text,
+  voice_spark text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint messages_body_not_empty check (char_length(trim(body)) > 0),
+  constraint messages_ripple_count_non_negative check (ripple_count >= 0),
   constraint uq_messages_profile_per_day unique (profile_id, message_date)
 );
+
+alter table public.messages
+  add column if not exists aura_color text;
+
+alter table public.messages
+  add column if not exists voice_spark text;
+
+create index if not exists idx_messages_original_sender_id on public.messages(original_sender_id);
 
 drop trigger if exists trg_messages_updated_at on public.messages;
 create trigger trg_messages_updated_at
@@ -61,13 +86,52 @@ create table if not exists public.encounters (
   observed_profile_id uuid not null references public.profiles(id) on delete cascade,
   message_id uuid references public.messages(id) on delete set null,
   observed_message_body varchar(280),
+  observed_message_date date,
+  observed_pin_type public.message_pin_type not null default 'classic',
+  observed_ripple_count integer not null default 0,
+  original_sender_id uuid references public.profiles(id) on delete set null,
+  observed_aura_color text,
+  observed_voice_spark text,
   observed_radiance_score integer not null,
+  encounter_latitude double precision,
+  encounter_longitude double precision,
   rssi integer,
   happened_at timestamptz not null,
   created_at timestamptz not null default now(),
   sync_source text not null default 'ble',
-  constraint chk_no_self_encounter check (observer_profile_id <> observed_profile_id)
+  constraint chk_no_self_encounter check (observer_profile_id <> observed_profile_id),
+  constraint encounters_ripple_non_negative check (observed_ripple_count >= 0)
 );
+
+alter table public.encounters
+  add column if not exists observed_message_date date;
+
+alter table public.encounters
+  add column if not exists observed_pin_type public.message_pin_type not null default 'classic';
+
+alter table public.encounters
+  add column if not exists observed_ripple_count integer not null default 0;
+
+alter table public.encounters
+  add column if not exists original_sender_id uuid references public.profiles(id) on delete set null;
+
+alter table public.encounters
+  add column if not exists observed_aura_color text;
+
+alter table public.encounters
+  add column if not exists observed_voice_spark text;
+
+alter table public.encounters
+  add column if not exists encounter_latitude double precision;
+
+alter table public.encounters
+  add column if not exists encounter_longitude double precision;
+
+alter table public.encounters
+  drop constraint if exists encounters_ripple_non_negative;
+
+alter table public.encounters
+  add constraint encounters_ripple_non_negative check (observed_ripple_count >= 0);
 
 create index if not exists idx_encounters_observer_profile on public.encounters(observer_profile_id, happened_at desc);
 create index if not exists idx_encounters_observed_profile on public.encounters(observed_profile_id, happened_at desc);
@@ -125,6 +189,25 @@ begin
   return coalesce(new, old);
 end;
 $$;
+
+create or replace function public.increment_message_ripple_count(
+  target_profile_id uuid,
+  target_message_date date
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.messages
+  set ripple_count = ripple_count + 1
+  where profile_id = target_profile_id
+    and message_date = target_message_date;
+end;
+$$;
+
+grant execute on function public.increment_message_ripple_count(uuid, date) to authenticated;
 
 drop trigger if exists trg_message_reactions_radiance_ins on public.message_reactions;
 create trigger trg_message_reactions_radiance_ins

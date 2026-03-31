@@ -1,12 +1,14 @@
 import { initLocalDb } from '../db/localDb';
 import { startSyncEngine } from './sync/syncEngine';
 import { initializeAuthSession } from './supabase/authSession';
+import { initializeNotifications } from './notifications';
 
 let stopSync: (() => void) | null = null;
 let stopAuth: (() => void) | null = null;
 
 export function bootstrapApp() {
   initLocalDb();
+  void initializeNotifications();
 
   stopSync = startSyncEngine();
 
