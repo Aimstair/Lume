@@ -250,5 +250,24 @@ export async function requestRadarPermissions() {
     return false;
   }
 
+  const bluetoothEnabled = await requestBluetoothServiceEnable();
+  if (!bluetoothEnabled) {
+    return false;
+  }
+
+  const locationEnabled = await ensureLocationServicesEnabled();
+  if (!locationEnabled) {
+    return false;
+  }
+
+  const state = await getPermissionState();
+  if (!state.bluetoothGranted || !state.locationGranted) {
+    Alert.alert(
+      'Permissions needed',
+      'Radar requires Bluetooth and Location to be turned on in your device settings.',
+    );
+    return false;
+  }
+
   return true;
 }

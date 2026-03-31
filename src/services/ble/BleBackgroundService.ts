@@ -251,6 +251,18 @@ export async function refreshBleBroadcastPayload() {
   }
 }
 
+export async function refreshBleBroadcastPayload() {
+  if ((!started && !starting) || stopping) {
+    return;
+  }
+
+  try {
+    await startPeripheralAdvertising();
+  } catch {
+    // Keep app stable if the broadcast refresh races with BLE transitions.
+  }
+}
+
 async function exchangePayloadWithDiscoveredDevice(peripheralId: string, rssi: number | null) {
   try {
     await BleManager.connect(peripheralId);
